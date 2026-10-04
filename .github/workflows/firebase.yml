@@ -28,8 +28,8 @@ jobs:
 
   deploy:
     needs: check
-    # main 브랜치이고, 배포용 Secret 이 설정돼 있을 때만 배포한다.
-    if: github.ref == 'refs/heads/main' && vars.FIREBASE_PROJECT_ID != ''
+    # 기본 브랜치이고, 배포용 Secret 이 설정돼 있을 때만 배포한다.
+    if: github.ref_name == github.event.repository.default_branch && vars.FIREBASE_PROJECT_ID != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

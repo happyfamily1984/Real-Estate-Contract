@@ -77,7 +77,7 @@
    - **Secrets** 탭: 이름 `FIREBASE_SERVICE_ACCOUNT`, 값은 JSON 키 파일 내용 전체
    - **Variables** 탭: 이름 `FIREBASE_PROJECT_ID`, 값은 Firebase 프로젝트 ID (예: `my-contract-app-1a2b3`)
 4. `.firebaserc` 의 `YOUR_FIREBASE_PROJECT_ID` 도 같은 ID 로 바꿉니다. (Cloud Shell 로 배포할 때 사용)
-5. `main` 브랜치에 코드가 올라가면 자동으로 배포됩니다. 수동 실행은 **Actions → Firebase 서버 배포 → Run workflow** 에서 할 수 있습니다.
+5. 저장소 기본 브랜치에 코드가 올라가면 자동으로 배포됩니다. 수동 실행은 **Actions → Firebase 서버 배포 → Run workflow** 에서 할 수 있습니다.
    - 처음 배포할 때는 필요한 Google Cloud API 를 켜느라 5~10분 정도 걸립니다.
    - 권한 오류가 나면 오류 메시지에 나온 역할을 서비스 계정에 추가하고 다시 실행하세요.
 
@@ -98,7 +98,7 @@ firebase deploy --only functions,firestore,storage --project <프로젝트ID>
 
 ### 5. 앱 설치
 
-1. GitHub 저장소 **Actions → Android APK** 가 `main` 에서 성공하면 **Releases** 에 `contract-app-N.apk` 가 올라옵니다.
+1. GitHub 저장소 **Actions → Android APK** 가 기본 브랜치에서 성공하면 **Releases** 에 `contract-app-N.apk` 가 올라옵니다.
 2. 휴대폰 브라우저로 저장소의 Releases 페이지를 열어 APK 를 받고 설치합니다.
    (처음에는 "출처를 알 수 없는 앱 설치"를 허용해야 합니다.)
 3. 앱을 열고 Google 계정으로 로그인 → **계약서 촬영**을 누릅니다.

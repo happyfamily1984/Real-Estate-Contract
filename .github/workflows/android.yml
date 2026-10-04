@@ -56,9 +56,9 @@ jobs:
           name: contract-app-${{ github.run_number }}
           path: contract-app-${{ github.run_number }}.apk
 
-      # main 브랜치에 올라가면 Releases 페이지에 APK 를 올린다. 휴대폰에서 바로 받아 설치하면 된다.
+      # 기본 브랜치에 올라가면 Releases 페이지에 APK 를 올린다. 휴대폰에서 바로 받아 설치하면 된다.
       - name: GitHub Release 에 APK 게시
-        if: github.ref == 'refs/heads/main' && env.CONFIGURED == 'true'
+        if: github.ref_name == github.event.repository.default_branch && env.CONFIGURED == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: app-v${{ github.run_number }}
