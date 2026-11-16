@@ -54,6 +54,16 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                // ./gradlew testDebugUnitTest -Proborazzi.record=true 로 화면 스크린샷을 만든다.
+                it.systemProperty("roborazzi.test.record", project.findProperty("roborazzi.record") ?: "false")
+                it.systemProperty("roborazzi.record.filePathStrategy", "relativePathFromRoborazziContextOutputDirectory")
+            }
+        }
+    }
 }
 
 dependencies {
@@ -69,6 +79,12 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
 
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
