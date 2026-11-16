@@ -27,7 +27,7 @@ data class Agent(
     val address: String,
 )
 
-/** Cloud Functions 가 Claude 로 분석해 저장한 결과. functions/src/schema.ts 와 같은 구조. */
+/** Gemini 가 분석한 결과. GeminiAnalyzer 의 스키마와 같은 구조. */
 data class ContractAnalysis(
     val contractType: String,
     val propertyType: String,
@@ -58,7 +58,9 @@ data class Contract(
     val status: ContractStatus,
     val title: String,
     val contractType: String,
-    val imagePaths: List<String>,
+    val pageCount: Int,
+    /** 목록에 보여 줄 작은 첫 페이지 사진 (JPEG). */
+    val thumbnail: ByteArray?,
     val memo: String,
     val error: String?,
     val createdAt: Date?,
@@ -85,7 +87,8 @@ data class Contract(
                 status = ContractStatus.from(doc.getString("status")),
                 title = doc.getString("title").orEmpty(),
                 contractType = doc.getString("contractType").orEmpty(),
-                imagePaths = (doc.get("imagePaths") as? List<*>)?.filterIsInstance<String>().orEmpty(),
+                pageCount = doc.getLong("pageCount")?.toInt() ?: 0,
+                thumbnail = doc.getBlob("thumbnail")?.toBytes(),
                 memo = doc.getString("memo").orEmpty(),
                 error = doc.getString("error"),
                 createdAt = doc.getTimestamp("createdAt")?.toDate(),

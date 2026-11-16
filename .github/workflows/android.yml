@@ -6,9 +6,6 @@ on:
       - "android/**"
       - ".github/workflows/android.yml"
       - ".github/ci/**"
-  pull_request:
-    paths:
-      - "android/**"
   workflow_dispatch:
 
 permissions:
@@ -45,8 +42,28 @@ jobs:
             echo "CONFIGURED=false" >> "$GITHUB_ENV"
           fi
 
+      # 저장소에는 암호화된 서명 키(signing.keystore.enc)만 있다. Secret KEYSTORE_PASSWORD 로 푼다.
+      - name: 서명 키 복호화
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_PASSWORD" ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+              -in app/signing.keystore.enc -out app/signing.keystore -pass env:KEYSTORE_PASSWORD
+            echo "SIGNED=true" >> "$GITHUB_ENV"
+          else
+            echo "::warning::KEYSTORE_PASSWORD secret 이 없어 임시 디버그 키로 서명합니다. 이 APK 는 구글 로그인이 되지 않습니다."
+            echo "SIGNED=false" >> "$GITHUB_ENV"
+          fi
+
       - name: APK 빌드
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: ./gradlew assembleRelease -PversionCode=${{ github.run_number }} --stacktrace
+
+      - name: 서명 키 지우기
+        if: always()
+        run: rm -f app/signing.keystore app/google-services.json
 
       - name: APK 이름 정리
         run: cp app/build/outputs/apk/release/app-release.apk ../contract-app-${{ github.run_number }}.apk
@@ -58,7 +75,7 @@ jobs:
 
       # 기본 브랜치에 올라가면 Releases 페이지에 APK 를 올린다. 휴대폰에서 바로 받아 설치하면 된다.
       - name: GitHub Release 에 APK 게시
-        if: github.ref_name == github.event.repository.default_branch && env.CONFIGURED == 'true'
+        if: github.ref_name == github.event.repository.default_branch && env.CONFIGURED == 'true' && env.SIGNED == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: app-v${{ github.run_number }}

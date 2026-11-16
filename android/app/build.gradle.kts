@@ -18,33 +18,38 @@ android {
         versionName = "1.0.${versionCode}"
     }
 
+    // 서명 키는 암호화된 signing.keystore.enc 로만 저장소에 들어 있다.
+    // CI 가 GitHub Secret KEYSTORE_PASSWORD 로 풀어서 signing.keystore 를 만든다. (README 참고)
+    // 키가 없으면 각 PC 의 기본 디버그 키로 서명한다 (구글 로그인은 안 됨).
+    val keystore = file("signing.keystore")
+    val keystorePassword = System.getenv("KEYSTORE_PASSWORD")
+    val hasReleaseKey = keystore.exists() && !keystorePassword.isNullOrEmpty()
+
     signingConfigs {
-        // 저장소에 포함된 서명 키. 어느 PC/CI 에서 빌드해도 SHA-1 이 같아서
-        // Firebase 구글 로그인 설정을 한 번만 하면 된다. (README 참고)
-        create("shared") {
-            storeFile = file("signing.keystore")
-            storePassword = "***REMOVED***"
-            keyAlias = "contract"
-            keyPassword = "***REMOVED***"
+        if (hasReleaseKey) {
+            create("shared") {
+                storeFile = keystore
+                storePassword = keystorePassword
+                keyAlias = "contract"
+                keyPassword = keystorePassword
+            }
         }
     }
 
     buildTypes {
+        val signing = if (hasReleaseKey) signingConfigs.getByName("shared") else signingConfigs.getByName("debug")
         debug {
-            signingConfig = signingConfigs.getByName("shared")
+            signingConfig = signing
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("shared")
+            signingConfig = signing
         }
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
@@ -68,7 +73,8 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore)
-    implementation(libs.firebase.storage)
+    implementation(libs.firebase.ai)
+    implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.kotlinx.coroutines.play.services)
 
     implementation(libs.androidx.credentials)
@@ -79,4 +85,10 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }

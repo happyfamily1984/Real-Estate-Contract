@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -50,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,6 +72,7 @@ fun ContractDetailScreen(
     val flow = remember(contractId) { ContractRepository.contractFlow(contractId) }
     val loaded by flow.collectAsStateWithLifecycle(initialValue = null)
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var confirmDelete by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
@@ -99,7 +100,7 @@ fun ContractDetailScreen(
                     ) {
                         IconButton(onClick = {
                             scope.launch {
-                                runCatching { ContractRepository.reanalyze(contract.id) }
+                                runCatching { ContractRepository.reanalyze(context, contract.id) }
                                     .onFailure { actionError = "재분석 요청 실패: ${it.message}" }
                             }
                         }) {
@@ -133,13 +134,13 @@ fun ContractDetailScreen(
 
             when (contract.status) {
                 ContractStatus.PENDING, ContractStatus.PROCESSING -> StatusCard(
-                    "AI가 계약서를 읽고 있어요. 보통 1~2분 걸립니다.\n앱을 닫아도 서버에서 계속 처리됩니다.",
+                    "AI가 계약서를 읽고 있어요. 보통 30초~1분 걸립니다.\n다른 화면으로 가도 백그라운드에서 계속 처리됩니다.",
                     loading = true,
                 )
                 ContractStatus.ERROR -> {
                     StatusCard("분석에 실패했습니다.\n${contract.error.orEmpty()}", loading = false)
                     Button(
-                        onClick = { scope.launch { runCatching { ContractRepository.reanalyze(contract.id) } } },
+                        onClick = { scope.launch { runCatching { ContractRepository.reanalyze(context, contract.id) } } },
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("다시 분석") }
                 }
@@ -177,9 +178,9 @@ fun ContractDetailScreen(
 @Composable
 private fun PhotoStrip(contract: Contract, onOpenPhoto: (String, Int) -> Unit) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        itemsIndexed(contract.imagePaths) { index, path ->
-            val url by produceState<String?>(null, path) {
-                value = runCatching { ContractRepository.imageUrl(path) }.getOrNull()
+        items(contract.pageCount) { index ->
+            val jpeg by produceState<ByteArray?>(null, contract.id, index) {
+                value = runCatching { ContractRepository.pageImage(contract.id, index) }.getOrNull()
             }
             Box(
                 Modifier
@@ -189,7 +190,7 @@ private fun PhotoStrip(contract: Contract, onOpenPhoto: (String, Int) -> Unit) {
                     .clickable { onOpenPhoto(contract.id, index) },
                 contentAlignment = Alignment.BottomEnd,
             ) {
-                url?.let {
+                jpeg?.let {
                     AsyncImage(
                         model = it,
                         contentDescription = "${index + 1}페이지",

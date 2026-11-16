@@ -62,6 +62,13 @@ fun LoginScreen() {
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyMedium,
             )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "AI 분석에는 Google Gemini 무료 버전을 씁니다.\n무료 버전은 보낸 사진이 Google 서비스 개선에 쓰일 수 있습니다.",
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(32.dp))
             if (loading) {
                 CircularProgressIndicator()

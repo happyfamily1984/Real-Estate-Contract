@@ -40,14 +40,14 @@ import com.happyfamily.contract.data.ContractRepository
 fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) {
     val flow = remember(contractId) { ContractRepository.contractFlow(contractId) }
     val contract by flow.collectAsStateWithLifecycle(initialValue = null)
-    val paths = contract?.imagePaths.orEmpty()
-    val pagerState = rememberPagerState(initialPage = initialPage) { paths.size }
+    val pageCount = contract?.pageCount ?: 0
+    val pagerState = rememberPagerState(initialPage = initialPage) { pageCount }
 
     Scaffold(
         containerColor = Color.Black,
         topBar = {
             TopAppBar(
-                title = { if (paths.isNotEmpty()) Text("${pagerState.currentPage + 1} / ${paths.size}") },
+                title = { if (pageCount > 0) Text("${pagerState.currentPage + 1} / $pageCount") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "뒤로")
@@ -65,15 +65,15 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
             state = pagerState,
             modifier = Modifier.fillMaxSize().padding(padding).background(Color.Black),
         ) { page ->
-            ZoomableImage(paths[page])
+            ZoomableImage(contractId, page)
         }
     }
 }
 
 @Composable
-private fun ZoomableImage(path: String) {
-    val url by produceState<String?>(null, path) {
-        value = runCatching { ContractRepository.imageUrl(path) }.getOrNull()
+private fun ZoomableImage(contractId: String, index: Int) {
+    val jpeg by produceState<ByteArray?>(null, contractId, index) {
+        value = runCatching { ContractRepository.pageImage(contractId, index) }.getOrNull()
     }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -83,11 +83,11 @@ private fun ZoomableImage(path: String) {
     }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (url == null) {
+        if (jpeg == null) {
             CircularProgressIndicator()
         } else {
             AsyncImage(
-                model = url,
+                model = jpeg,
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier

@@ -5,11 +5,14 @@ android/app/build/
 android/local.properties
 android/.idea/
 android/app/google-services.json
+# 서명 키 원본과 비밀번호는 절대 커밋하지 않는다 (암호화본 signing.keystore.enc 만 커밋)
+android/app/signing.keystore
+*.jks
+KEYSTORE_PASSWORD.txt
 *.iml
 
 # Node / Firebase
 node_modules/
-functions/lib/
 .firebase/
 firebase-debug.log*
 

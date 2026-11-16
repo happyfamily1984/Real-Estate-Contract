@@ -49,7 +49,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -108,7 +107,7 @@ fun ContractListScreen(
     }
     // 2) 스캐너를 쓸 수 없는 기기용: 갤러리에서 여러 장 선택
     val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(maxItems = 20),
+        ActivityResultContracts.PickMultipleVisualMedia(maxItems = ContractRepository.MAX_PAGES),
     ) { uris -> viewModel.upload(uris, onOpen) }
 
     fun pickFromGallery() {
@@ -118,7 +117,7 @@ fun ContractListScreen(
     fun startScan() {
         val options = GmsDocumentScannerOptions.Builder()
             .setGalleryImportAllowed(true)
-            .setPageLimit(20)
+            .setPageLimit(ContractRepository.MAX_PAGES)
             .setResultFormats(GmsDocumentScannerOptions.RESULT_FORMAT_JPEG)
             .setScannerMode(GmsDocumentScannerOptions.SCANNER_MODE_FULL)
             .build()
@@ -232,7 +231,7 @@ private fun CenterText(text: String) {
 private fun ContractCard(contract: Contract, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Thumbnail(contract.imagePaths.firstOrNull())
+            Thumbnail(contract.thumbnail)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -289,17 +288,14 @@ private fun ContractCard(contract: Contract, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Thumbnail(path: String?) {
-    val url by produceState<String?>(null, path) {
-        value = path?.let { runCatching { ContractRepository.imageUrl(it) }.getOrNull() }
-    }
+private fun Thumbnail(jpeg: ByteArray?) {
     Box(
         Modifier
             .size(64.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        url?.let {
+        jpeg?.let {
             AsyncImage(
                 model = it,
                 contentDescription = null,
