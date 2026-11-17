@@ -33,6 +33,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import com.happyfamily.contract.data.ContractRepository
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,6 +46,21 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
     val contract by flow.collectAsStateWithLifecycle(initialValue = null)
     val pageCount = contract?.pageCount ?: 0
     val pagerState = rememberPagerState(initialPage = initialPage) { pageCount }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val foldersFlow = remember { com.happyfamily.contract.data.FolderRepository.foldersFlow() }
+    val folders by foldersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    var picking by remember { mutableStateOf(false) }
+    var info by remember { mutableStateOf<String?>(null) }
+
+    // 새로 올린 계약서(폴더 확인 전)를 크게 볼 때: 여기서 바로 폴더에 넣을 수 있다.
+    val c = contract
+    val suggestion = if (c != null && !c.confirmed) {
+        folders.firstOrNull { it.id == (c.folderId ?: c.suggestedFolderId) }?.name
+            ?: c.analysis?.let { "새 폴더 '${it.folderName.ifBlank { c.title.take(12) }}'" }
+    } else {
+        null
+    }
 
     Scaffold(
         containerColor = Color.Black,
@@ -60,6 +79,36 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
                 ),
             )
         },
+        bottomBar = {
+            if (c != null && !c.confirmed) {
+                androidx.compose.foundation.layout.Column(
+                    Modifier.background(Color.Black).navigationBarsPadding().padding(12.dp),
+                ) {
+                    Text(
+                        info ?: suggestion?.let { "제안: $it" } ?: "분석이 끝나면 폴더를 제안해요",
+                        color = Color.White,
+                        fontSize = 14.sp,
+                    )
+                    androidx.compose.foundation.layout.Spacer(Modifier.padding(4.dp))
+                    androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.material3.Button(
+                            onClick = {
+                                scope.launch {
+                                    runCatching { com.happyfamily.contract.data.FolderRepository.confirmSuggested(context, listOf(c)) }
+                                        .onSuccess { onBack() }
+                                        .onFailure { info = friendlyError(it) }
+                                }
+                            },
+                            enabled = suggestion != null,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("제안 폴더로 넣기") }
+                        androidx.compose.material3.OutlinedButton(onClick = { picking = true }, modifier = Modifier.weight(1f)) {
+                            Text("다른 폴더로", color = Color.White)
+                        }
+                    }
+                }
+            }
+        },
     ) { padding ->
         HorizontalPager(
             state = pagerState,
@@ -67,6 +116,24 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
         ) { page ->
             ZoomableImage(contractId, page)
         }
+    }
+
+    if (picking && c != null) {
+        FolderPickerDialog(
+            title = "어느 폴더로 옮길까요?",
+            folders = folders,
+            currentFolderId = c.folderId ?: c.suggestedFolderId,
+            suggestedNewName = c.analysis?.folderName.orEmpty(),
+            onDismiss = { picking = false },
+            onPick = { target, newName ->
+                picking = false
+                scope.launch {
+                    runCatching { com.happyfamily.contract.data.FolderRepository.moveContracts(context, listOf(c), target, newName) }
+                        .onSuccess { onBack() }
+                        .onFailure { info = friendlyError(it) }
+                }
+            },
+        )
     }
 }
 

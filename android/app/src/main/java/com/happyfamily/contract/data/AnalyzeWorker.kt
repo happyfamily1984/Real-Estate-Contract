@@ -63,9 +63,15 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             // 이 단계가 실패해도 분석 결과는 이미 저장돼 있으므로 계약서를 오류로 만들지 않는다.
             runCatching {
                 val saved = ContractRepository.get(id) ?: return Result.success()
-                val folderId = FolderRepository.assignFolder(saved, matchFolderId, folders)
-                // 여러 장을 한꺼번에 올리면 같은 폴더 정리가 여러 번 예약되는데, 마지막 한 번만 실행된다.
-                SummaryWorker.enqueue(applicationContext, folderId, force = false, delaySeconds = 20)
+                if (!saved.confirmed && saved.folderId == null) {
+                    // 새로 올린 계약서: 폴더를 바로 만들지 않고 '제안'만 해 둔다.
+                    // 사용자가 '새로 올린 계약서 정리'에서 넣기를 누를 때 폴더에 넣는다 (빈 폴더·중복 폴더 방지).
+                    ContractRepository.setSuggestion(id, FolderRepository.suggestFolder(saved, matchFolderId, folders))
+                } else {
+                    val folderId = FolderRepository.assignFolder(saved, matchFolderId, folders)
+                    // 여러 장을 한꺼번에 올리면 같은 폴더 정리가 여러 번 예약되는데, 마지막 한 번만 실행된다.
+                    SummaryWorker.enqueue(applicationContext, folderId, force = false, delaySeconds = 20)
+                }
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {

@@ -114,6 +114,8 @@ fun HomeScreen(
     }
 
     val importer = rememberImporter(importVm, folderId = null, onCreated = onOpenContract)
+    // 여러 개 올리면 끝나자마자 '새로 올린 계약서 정리' 화면으로
+    importVm.onCreatedMany = onOpenInbox
 
     HomeContent(
         state = state,
@@ -342,7 +344,7 @@ internal fun HomeContent(
                                 SortAndViewBar(sortMode, sortDesc, onSort, onToggleSortDirection, viewMode, onViewMode)
                             }
                             if (state.unfiled.isNotEmpty()) {
-                                sectionHeader("분석 중인 계약서", state.unfiled.size, actionLabel = "분석 다시 시작", onAction = onRestartAnalysis)
+                                sectionHeader("분석 중·실패한 계약서", state.unfiled.size, actionLabel = "분석 다시 시작", onAction = onRestartAnalysis)
                                 items(state.unfiled, key = { "c-" + it.id }) { c ->
                                     ContractCard(c, onClick = { onOpenContract(c.id) })
                                 }

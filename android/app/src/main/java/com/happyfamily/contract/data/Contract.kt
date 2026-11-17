@@ -110,6 +110,8 @@ data class Contract(
     val sortDate: String = "",
     /** 사용자가 폴더를 확인했는지. 새로 올린 계약서는 false → '새로 올린 계약서 정리'에 나온다. */
     val confirmed: Boolean = true,
+    /** 새로 올린 계약서에 AI 가 제안한 기존 폴더 (없으면 새 폴더 제안 — 이름은 analysis.folderName) */
+    val suggestedFolderId: String? = null,
 ) {
     /** 검색어가 주소, 당사자 이름, 메모 등에 들어 있는지. */
     fun matches(query: String): Boolean {
@@ -142,6 +144,7 @@ data class Contract(
                 sortDate = doc.getString("sortDate").orEmpty(),
                 // 예전 계약서에는 이 값이 없으므로 확인된 것으로 본다.
                 confirmed = doc.getBoolean("confirmed") ?: true,
+                suggestedFolderId = doc.getString("suggestedFolderId")?.takeIf { it.isNotBlank() },
             )
         }
 

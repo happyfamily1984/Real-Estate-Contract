@@ -238,6 +238,10 @@ object ContractRepository {
         }
     }
 
+    suspend fun setSuggestion(id: String, folderId: String?) {
+        contracts(uid()).document(id).update("suggestedFolderId", folderId ?: FieldValue.delete()).await()
+    }
+
     /** 새로 올린 계약서를 지금 폴더 그대로 확인 처리 */
     suspend fun confirmAll(ids: Collection<String>) {
         val uid = uid()

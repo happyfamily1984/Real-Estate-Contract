@@ -98,10 +98,16 @@ class InboxViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 제안 폴더로 넣기 (제안이 새 폴더면 이때 만든다) */
     fun confirm(contracts: List<Contract>) = viewModelScope.launch {
         try {
-            ContractRepository.confirmAll(contracts.map { it.id })
-            message.value = "${contracts.size}건을 지금 폴더 그대로 확인했어요."
+            val ready = contracts.filter { it.folderId != null || it.analysis != null }
+            if (ready.isEmpty()) {
+                message.value = "아직 분석 중이라 제안 폴더가 없어요. 분석이 끝나면 넣을 수 있어요."
+                return@launch
+            }
+            val names = FolderRepository.confirmSuggested(getApplication(), ready)
+            message.value = "${ready.size}건을 넣었어요: ${names.joinToString(", ")}"
         } catch (e: Exception) {
             message.value = friendlyError(e)
         }
@@ -129,10 +135,28 @@ fun InboxScreen(
     var moving by remember { mutableStateOf<List<Contract>?>(null) }
 
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.message.value = null } }
-    // 목록에서 사라진 것은 선택에서도 뺀다.
-    LaunchedEffect(contracts) { contracts?.let { list -> selected = selected.filter { id -> list.any { it.id == id } }.toSet() } }
+    // 목록에서 사라진 것은 선택에서도 뺀다. 다 정리하면 화면을 닫는다.
+    var hadItems by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(contracts) {
+        val list = contracts ?: return@LaunchedEffect
+        selected = selected.filter { id -> list.any { it.id == id } }.toSet()
+        if (list.isNotEmpty()) hadItems = true
+        if (list.isEmpty() && hadItems) {
+            android.widget.Toast.makeText(context, "새로 올린 계약서를 모두 정리했어요.", android.widget.Toast.LENGTH_SHORT).show()
+            onBack()
+        }
+    }
 
-    val folderName: (String?) -> String? = { id -> folders.firstOrNull { it.id == id }?.name }
+    /** 제안 폴더 표시: 이미 있는 폴더 이름, 또는 새 폴더 이름. 분석 중이면 null */
+    val suggestion: (Contract) -> String? = { c ->
+        val existing = folders.firstOrNull { it.id == (c.folderId ?: c.suggestedFolderId) }?.name
+        when {
+            existing != null -> existing
+            c.analysis != null -> "새 폴더 '${c.analysis.folderName.ifBlank { c.title.take(12) }}'"
+            else -> null
+        }
+    }
 
     Scaffold(
         containerColor = Color.Transparent,
@@ -161,10 +185,10 @@ fun InboxScreen(
                     Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding().padding(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    OutlinedButton(onClick = { vm.confirm(chosen.filter { it.folderId != null }) }, modifier = Modifier.weight(1f)) {
-                        Text("이대로 확인 (${chosen.count { it.folderId != null }})")
+                    OutlinedButton(onClick = { vm.confirm(chosen) }, modifier = Modifier.weight(1f)) {
+                        Text("제안대로 넣기 (${chosen.count { it.folderId != null || it.analysis != null }})")
                     }
-                    Button(onClick = { moving = chosen }, modifier = Modifier.weight(1f)) { Text("폴더로 옮기기 (${chosen.size})") }
+                    Button(onClick = { moving = chosen }, modifier = Modifier.weight(1f)) { Text("다른 폴더로 (${chosen.size})") }
                 }
             }
         },
@@ -183,16 +207,28 @@ fun InboxScreen(
             ) {
                 item {
                     Text(
-                        "AI 가 같은 부동산 폴더를 제안해 두었어요. 맞으면 '이대로 확인', 다르면 '폴더 옮기기'를 누르세요. 처리한 계약서는 목록에서 사라집니다. 사진을 누르면 크게 볼 수 있어요.",
+                        "AI 가 같은 부동산 폴더를 제안해 두었어요. 맞으면 '제안 폴더로 넣기', 다르면 '다른 폴더로'를 누르세요. 넣은 계약서는 목록에서 사라집니다. 사진을 누르면 크게 볼 수 있어요.",
                         color = Brand.TextSub,
                         fontSize = 13.sp,
                         lineHeight = 19.sp,
                     )
+                    Spacer(Modifier.height(8.dp))
+                    val ready = list.count { it.folderId != null || it.analysis != null }
+                    Button(
+                        onClick = { vm.confirm(list) },
+                        enabled = ready > 0,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                    ) {
+                        Text("전체 ${ready}건 제안 폴더로 넣기", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (ready < list.size) {
+                        Text("분석 중인 ${list.size - ready}건은 끝나면 넣을 수 있어요.", color = Brand.TextSub, fontSize = 12.sp)
+                    }
                 }
                 items(list, key = { it.id }) { c ->
                     InboxCard(
                         contract = c,
-                        suggested = folderName(c.folderId),
+                        suggested = suggestion(c),
                         selected = c.id in selected,
                         onToggle = { selected = if (c.id in selected) selected - c.id else selected + c.id },
                         onPreview = { onPreview(c.id) },
@@ -209,7 +245,7 @@ fun InboxScreen(
         FolderPickerDialog(
             title = if (targets.size == 1) "어느 폴더로 옮길까요?" else "${targets.size}건을 어느 폴더로 옮길까요?",
             folders = folders,
-            currentFolderId = targets.map { it.folderId }.distinct().singleOrNull(),
+            currentFolderId = targets.map { it.folderId ?: it.suggestedFolderId }.distinct().singleOrNull(),
             suggestedNewName = targets.firstNotNullOfOrNull { it.analysis?.folderName?.takeIf { n -> n.isNotBlank() } }.orEmpty(),
             onDismiss = { moving = null },
             onPick = { target, newName ->
@@ -300,7 +336,7 @@ internal fun InboxCard(
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    if (suggested != null) "제안 폴더: $suggested" else "폴더 미정",
+                    if (suggested != null) "제안: $suggested" else "분석이 끝나면 폴더를 제안해요",
                     color = if (suggested != null) Brand.Navy else Brand.TextSub,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -308,8 +344,10 @@ internal fun InboxCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (suggested != null) TextButton(onClick = onConfirm) { Text("이대로 확인") }
-                TextButton(onClick = onMove) { Text("폴더 옮기기") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onConfirm, enabled = suggested != null, modifier = Modifier.weight(1f)) { Text("제안 폴더로 넣기") }
+                OutlinedButton(onClick = onMove, modifier = Modifier.weight(1f)) { Text("다른 폴더로") }
             }
         }
     }

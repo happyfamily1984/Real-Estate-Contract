@@ -55,6 +55,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
      * 파일에서 고른 PDF·사진들. PDF 는 파일마다 계약서 한 건이 된다.
      * 사진이 여러 장이면 한 계약서로 묶을지, 사진마다 따로 올릴지 물어본다.
      */
+    /** 여러 건을 올렸을 때 (폴더 밖에서) — 정리 화면으로 보낸다 */
+    var onCreatedMany: (() -> Unit)? = null
+
     fun uploadFiles(files: List<Uri>, folderId: String?, onCreated: (String) -> Unit) {
         if (files.isEmpty() || _upload.value != null) return
         val app = getApplication<Application>()
@@ -117,6 +120,10 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             _upload.value = null
             when {
                 created.size == 1 && failed.isEmpty() -> onCreated(created[0])
+                created.size > 1 && folderId == null && onCreatedMany != null -> {
+                    onCreatedMany?.invoke()
+                    if (failed.isNotEmpty()) _message.value = "실패 ${failed.size}건: " + failed.take(3).joinToString(" / ")
+                }
                 created.isNotEmpty() -> _message.value = buildString {
                     append("계약서 ${created.size}건을 저장했어요. 순서대로 분석한 뒤 폴더로 정리됩니다.")
                     if (failed.isNotEmpty()) append(" 실패 ${failed.size}건: ").append(failed.take(3).joinToString(" / "))

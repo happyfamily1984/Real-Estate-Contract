@@ -227,7 +227,11 @@ object FolderRepository {
             ) to name
         }
         ContractRepository.setFolderAll(contracts.map { it.id }, folderId)
-        (contracts.mapNotNull { it.folderId } + folderId).distinct().forEach {
+        // 옮기고 나서 비어 버린 원래 폴더는 지운다 (자동으로 만들어졌던 폴더가 남지 않게).
+        val oldFolders = contracts.mapNotNull { it.folderId }.distinct().filter { it != folderId }
+        val remaining = ContractRepository.allContracts().mapNotNull { it.folderId }.toSet()
+        oldFolders.filter { it !in remaining }.forEach { folders().document(it).delete().await() }
+        (oldFolders.filter { it in remaining } + folderId).forEach {
             SummaryWorker.enqueue(context, it, force = false, delaySeconds = 3)
         }
         return folderId to folderName
@@ -300,6 +304,69 @@ object FolderRepository {
 
     private fun addressKey(address: String) = address.replace(Regex("[\\s,.()\\-]"), "")
 
+    /** 새로 올린 계약서에 맞는 기존 폴더 (AI 가 고른 폴더 → 같은 주소·이름 폴더). 없으면 null = 새 폴더 제안 */
+    fun suggestFolder(contract: Contract, matchFolderId: String?, folders: List<Folder>): String? {
+        val a = contract.analysis
+        folders.firstOrNull { it.id == matchFolderId }?.let { return it.id }
+        val addr = a?.propertyAddress.orEmpty()
+        if (addr.isNotBlank()) {
+            folders.firstOrNull { it.address.isNotBlank() && addressKey(it.address) == addressKey(addr) }?.let { return it.id }
+        }
+        val name = a?.folderName.orEmpty()
+        if (name.isNotBlank()) folders.firstOrNull { it.name == name }?.let { return it.id }
+        return null
+    }
+
+    /**
+     * '제안 폴더로 넣기': 새로 올린 계약서들을 제안된 폴더에 넣는다. 제안이 새 폴더면 그때 만든다.
+     * 같은 부동산(주소·이름이 같은) 새 계약서 여러 건은 한 폴더로 모은다. 넣은 폴더 이름들을 돌려준다.
+     */
+    suspend fun confirmSuggested(context: Context, contracts: List<Contract>): List<String> {
+        val folders = allFolders().toMutableList()
+        val touched = mutableMapOf<String, String>()
+        for (c in contracts.sortedBy { it.createdAt }) {
+            if (c.folderId != null) {
+                ContractRepository.confirmAll(listOf(c.id))
+                touched[c.folderId] = folders.firstOrNull { it.id == c.folderId }?.name.orEmpty()
+                continue
+            }
+            val existing = folders.firstOrNull { it.id == c.suggestedFolderId }?.id ?: suggestFolder(c, null, folders)
+            val target = existing ?: run {
+                val a = c.analysis
+                val name = a?.folderName?.ifBlank { null } ?: a?.propertyAddress?.split(" ")?.take(3)?.joinToString(" ")
+                    ?.ifBlank { null } ?: "새 계약 폴더"
+                val id = createFolder(
+                    name = name,
+                    address = a?.propertyAddress.orEmpty(),
+                    stakeholder = Stakeholders.join(Stakeholders.matching(allStakeholders().map { it.name }, listOfNotNull(a))),
+                    thumbnail = c.thumbnail,
+                )
+                get(id)?.let { folders += it }
+                id
+            }
+            ContractRepository.setFolderAll(listOf(c.id), target)
+            touched[target] = folders.firstOrNull { it.id == target }?.name.orEmpty()
+        }
+        touched.keys.forEach { SummaryWorker.enqueue(context, it, force = false, delaySeconds = 3) }
+        return touched.values.distinct()
+    }
+
+    /** 계약서가 하나도 없는 폴더를 지운다 (만든 지 [minAgeMinutes]분 지난 것만 — 막 만들어 넣는 중인 폴더는 제외). */
+    suspend fun deleteEmptyFolders(minAgeMinutes: Long = 10): Int {
+        val used = ContractRepository.allContracts().mapNotNull { it.folderId }.toSet()
+        val cutoff = System.currentTimeMillis() - minAgeMinutes * 60_000
+        var n = 0
+        for (doc in folders().get().await().documents) {
+            if (doc.id in used) continue
+            val created = doc.getTimestamp("createdAt")?.toDate()?.time ?: 0L
+            if (created < cutoff) {
+                doc.reference.delete().await()
+                n++
+            }
+        }
+        return n
+    }
+
     /**
      * 분석이 끝난 계약서를 폴더에 넣는다. 이미 폴더가 정해져 있으면 그대로 두고,
      * 아니면 AI 가 고른 같은 부동산 폴더 → 같은 주소 폴더 → 새 폴더 순서로 정한다.
@@ -332,7 +399,7 @@ object FolderRepository {
     /** 폴더 기능이 생기기 전에 분석된 계약서들을 폴더에 넣는다 (한 번만 실행되면 됨). */
     suspend fun fileUnfiledContracts(context: Context) {
         val unfiled = ContractRepository.allContracts()
-            .filter { it.folderId == null && it.status == ContractStatus.DONE && it.analysis != null }
+            .filter { it.folderId == null && it.confirmed && it.status == ContractStatus.DONE && it.analysis != null }
         if (unfiled.isEmpty()) return
         val touched = mutableSetOf<String>()
         for (contract in unfiled) {

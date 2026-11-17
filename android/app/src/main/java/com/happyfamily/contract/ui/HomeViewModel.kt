@@ -130,7 +130,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             .filter { fo -> fo.matches(q) || contracts.any { it.folderId == fo.id && it.matches(q) } }
         val shown = FolderSort.sort(filtered, contracts, f.sort, f.desc)
         HomeState(
-            unfiled = contracts.filter { it.folderId == null && it.matches(q) },
+            // 정리 화면에서 다루는 새 계약서(확인 전)는 빼고, 분석 중·실패한 것만
+            unfiled = contracts.filter { it.folderId == null && it.confirmed && it.matches(q) },
             ongoing = shown.filter { it.status == FolderStatus.ONGOING },
             done = shown.filter { it.status == FolderStatus.DONE },
             contractCounts = counts,
@@ -165,7 +166,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         // 폴더 기능 이전에 저장된 계약서를 폴더로 옮긴다.
-        viewModelScope.launch { runCatching { FolderRepository.fileUnfiledContracts(getApplication()) } }
+        viewModelScope.launch {
+            runCatching { FolderRepository.fileUnfiledContracts(getApplication()) }
+            // 계약서가 하나도 없는 폴더(자동으로 만들어졌다가 비게 된 것 등)는 정리한다.
+            runCatching { FolderRepository.deleteEmptyFolders() }
+        }
         // 앱이 꺼지거나 예전 버전에서 멈춘 분석을 다시 대기열에 넣는다.
         viewModelScope.launch { runCatching { AnalyzeWorker.recoverStuck(getApplication()) } }
         // AI 를 못 써서 기본 분석으로 끝난 계약서를 AI 를 쓸 수 있게 되면 다시 분석한다.

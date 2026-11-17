@@ -149,11 +149,26 @@ fun ContractDetailScreen(
 
             PhotoStrip(contract, onOpenPhoto)
 
+            // 새로 올린 계약서(확인 전)는 AI 제안 폴더를 보여 주고 '넣기'로 확정
+            val suggestion = if (!contract.confirmed) {
+                val existing = folders.firstOrNull { it.id == (contract.folderId ?: contract.suggestedFolderId) }?.name
+                existing ?: contract.analysis?.let { "새 폴더 '${it.folderName.ifBlank { contract.title.take(12) }}'" }
+            } else {
+                null
+            }
             FolderRow(
                 folder = folders.firstOrNull { it.id == contract.folderId },
-                analyzing = contract.status != ContractStatus.DONE,
+                analyzing = contract.status != ContractStatus.DONE && contract.status != ContractStatus.ERROR,
+                suggestion = suggestion,
                 onOpen = { contract.folderId?.let(onOpenFolder) },
                 onMove = { moving = true },
+                onConfirm = {
+                    scope.launch {
+                        runCatching { FolderRepository.confirmSuggested(context, listOf(contract)) }
+                            .onSuccess { moveMessage = "'${it.joinToString()}' 폴더에 넣었어요." }
+                            .onFailure { actionError = friendlyError(it) }
+                    }
+                },
             )
 
             when (contract.status) {
@@ -216,7 +231,7 @@ fun ContractDetailScreen(
         FolderPickerDialog(
             title = "폴더 옮기기",
             folders = folders,
-            currentFolderId = contract.folderId,
+            currentFolderId = contract.folderId ?: contract.suggestedFolderId,
             suggestedNewName = contract.analysis?.folderName.orEmpty(),
             onDismiss = { moving = false },
             onPick = { target, newName ->
@@ -260,25 +275,41 @@ fun ContractDetailScreen(
 }
 
 @Composable
-private fun FolderRow(folder: Folder?, analyzing: Boolean, onOpen: () -> Unit, onMove: () -> Unit) {
+private fun FolderRow(
+    folder: Folder?,
+    analyzing: Boolean,
+    suggestion: String?,
+    onOpen: () -> Unit,
+    onMove: () -> Unit,
+    onConfirm: () -> Unit,
+) {
     Card(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
     ) {
-        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Folder, contentDescription = null, tint = Brand.Blue)
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text("계약 폴더", color = Brand.TextSub, fontSize = 12.sp)
-                Text(
-                    folder?.name ?: if (analyzing) "분석이 끝나면 자동으로 정해져요" else "폴더 없음",
-                    color = Brand.Navy,
-                    fontWeight = FontWeight.SemiBold,
-                )
+        Column(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Folder, contentDescription = null, tint = Brand.Blue)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("계약 폴더", color = Brand.TextSub, fontSize = 12.sp)
+                    Text(
+                        folder?.name ?: when {
+                            analyzing -> "분석이 끝나면 폴더를 제안해요"
+                            suggestion != null -> "아직 폴더에 넣지 않았어요"
+                            else -> "폴더 없음"
+                        },
+                        color = Brand.Navy,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (folder != null) TextButton(onClick = onOpen) { Text("열기") }
+                TextButton(onClick = onMove, enabled = !analyzing) { Text(if (folder == null) "다른 폴더로" else "옮기기") }
             }
-            if (folder != null) TextButton(onClick = onOpen) { Text("열기") }
-            TextButton(onClick = onMove, enabled = !analyzing) { Text("옮기기") }
+            if (suggestion != null) {
+                Button(onClick = onConfirm, modifier = Modifier.fillMaxWidth()) { Text("제안 폴더로 넣기: $suggestion") }
+            }
         }
     }
 }
