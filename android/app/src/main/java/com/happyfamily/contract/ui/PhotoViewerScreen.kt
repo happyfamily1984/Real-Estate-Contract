@@ -87,7 +87,7 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
                     val current = folders.firstOrNull { it.id == c.folderId }?.name
                     Text(
                         info ?: when {
-                            !c.confirmed && suggestion != null -> "제안 폴더: $suggestion"
+                            !c.confirmed && suggestion != null -> "옮길 폴더(제안): $suggestion"
                             current != null -> "지금 폴더: $current"
                             c.analysis == null -> "분석이 끝나면 폴더를 제안해요"
                             else -> "아직 폴더에 넣지 않았어요"
@@ -97,21 +97,20 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
                     )
                     androidx.compose.foundation.layout.Spacer(Modifier.padding(4.dp))
                     androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-                        if (!c.confirmed) {
-                            androidx.compose.material3.Button(
-                                onClick = {
-                                    scope.launch {
-                                        runCatching { com.happyfamily.contract.data.FolderRepository.confirmSuggested(context, listOf(c)) }
-                                            .onSuccess { onBack() }
-                                            .onFailure { info = friendlyError(it) }
-                                    }
-                                },
-                                enabled = suggestion != null,
-                                modifier = Modifier.weight(1f),
-                            ) { Text("제안 폴더로 넣기") }
-                        }
+                        // 옮기기 = 확정: 위에 표시된 폴더(제안 폴더 또는 지금 폴더)에 넣고 목록에서 뺀다.
+                        androidx.compose.material3.Button(
+                            onClick = {
+                                scope.launch {
+                                    runCatching { com.happyfamily.contract.data.FolderRepository.confirmSuggested(context, listOf(c)) }
+                                        .onSuccess { onBack() }
+                                        .onFailure { info = friendlyError(it) }
+                                }
+                            },
+                            enabled = c.folderId != null || suggestion != null,
+                            modifier = Modifier.weight(1f),
+                        ) { Text("옮기기") }
                         androidx.compose.material3.OutlinedButton(onClick = { picking = true }, modifier = Modifier.weight(1f)) {
-                            Text(if (c.confirmed) "다른 폴더로 옮기기" else "다른 폴더로", color = Color.White)
+                            Text("다른 폴더로 옮기기", color = Color.White)
                         }
                     }
                 }

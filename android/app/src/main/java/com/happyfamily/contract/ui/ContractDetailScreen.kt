@@ -236,7 +236,7 @@ fun ContractDetailScreen(
             onDismiss = { moving = false },
             onPick = { target, newName ->
                 moving = false
-                if (target != null && target == contract.folderId) return@FolderPickerDialog
+                if (target != null && target == contract.folderId && contract.confirmed) return@FolderPickerDialog
                 scope.launch {
                     runCatching { FolderRepository.moveContracts(context, listOf(contract), target, newName) }
                         .onSuccess { (_, name) -> actionError = null; moveMessage = "'$name' 폴더로 옮겼어요." }

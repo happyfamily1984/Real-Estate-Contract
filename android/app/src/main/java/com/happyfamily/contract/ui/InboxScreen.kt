@@ -356,8 +356,8 @@ internal fun InboxCard(
             }
             // 여러 개를 고르는 중에는 카드 버튼을 숨기고 아래 '고른 n건' 버튼으로 한꺼번에 처리한다.
             if (!selecting) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onConfirm, enabled = suggested != null, modifier = Modifier.weight(1f)) { Text("제안 폴더로 넣기") }
-                OutlinedButton(onClick = onMove, modifier = Modifier.weight(1f)) { Text("다른 폴더로") }
+                Button(onClick = onConfirm, enabled = suggested != null, modifier = Modifier.weight(1f)) { Text("옮기기") }
+                OutlinedButton(onClick = onMove, modifier = Modifier.weight(1f)) { Text("다른 폴더로 옮기기") }
             }
         }
     }
