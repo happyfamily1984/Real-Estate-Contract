@@ -73,6 +73,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.happyfamily.contract.data.ContractRepository
+import com.happyfamily.contract.data.Folder
 import com.happyfamily.contract.data.FolderRepository
 import com.happyfamily.contract.data.Plan
 import com.happyfamily.contract.data.ReminderSettings
@@ -90,17 +91,23 @@ import kotlinx.coroutines.launch
 
 data class ScheduleItem(val event: ScheduleEvent, val plan: Plan?)
 
+/** 향후 일정 화면 내용: 날짜 있는 일정 + 다음 일정이 없는 진행중 폴더 */
+data class ScheduleState(val items: List<ScheduleItem>, val undated: List<Folder>)
+
 class ScheduleViewModel(application: Application) : AndroidViewModel(application) {
     /** null 이면 불러오는 중 */
-    val items: StateFlow<List<ScheduleItem>?> = combine(
+    val state: StateFlow<ScheduleState?> = combine(
         FolderRepository.foldersFlow().catch { emit(emptyList()) },
         ContractRepository.contractsFlow().catch { emit(emptyList()) },
         ScheduleRepository.plansFlow().catch { emit(emptyList()) },
         ScheduleRepository.editsFlow().catch { emit(emptyList()) },
     ) { folders, contracts, plans, edits ->
         val byKey = plans.associateBy { it.eventKey }
-        ScheduleRepository.applyEdits(ScheduleRepository.events(folders, contracts), edits)
-            .map { ScheduleItem(it, byKey[it.key]) }
+        val events = ScheduleRepository.applyEdits(ScheduleRepository.events(folders, contracts), edits)
+        ScheduleState(
+            items = events.map { ScheduleItem(it, byKey[it.key]) },
+            undated = ScheduleRepository.foldersWithoutEvents(folders, events),
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private val _message = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
@@ -130,8 +137,8 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         ScheduleRepository.deleteEvent(e)
     }
 
-    fun addEvent(folderName: String, type: String, date: String, detail: String) =
-        run("일정을 추가했어요.") { ScheduleRepository.addEvent(null, folderName, type, date, detail) }
+    fun addEvent(folderId: String?, folderName: String, type: String, date: String, detail: String) =
+        run("일정을 추가했어요.") { ScheduleRepository.addEvent(folderId, folderName, type, date, detail) }
 
     fun reset() = run {
         val n = ScheduleRepository.resetEdits()
@@ -147,10 +154,11 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
 @Composable
 fun ScheduleScreen(onBack: () -> Unit, onOpenFolder: (String) -> Unit, vm: ScheduleViewModel = viewModel()) {
     val context = LocalContext.current
-    val items by vm.items.collectAsStateWithLifecycle()
+    val scheduleState by vm.state.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<ScheduleItem?>(null) }
     var editingEvent by remember { mutableStateOf<ScheduleEvent?>(null) }
-    var adding by remember { mutableStateOf(false) }
+    /** null 이면 닫힘. 폴더를 정해 추가할 때는 그 폴더 */
+    var adding by remember { mutableStateOf<Pair<String?, String>?>(null) }
     var confirmReset by remember { mutableStateOf(false) }
     val message by vm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
@@ -216,21 +224,59 @@ fun ScheduleScreen(onBack: () -> Unit, onOpenFolder: (String) -> Unit, vm: Sched
             }
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { adding = true }) { Text("+ 일정 추가") }
+                    OutlinedButton(onClick = { adding = null to "" }) { Text("+ 일정 추가") }
                     OutlinedButton(onClick = { confirmReset = true }) { Text("계약서 내용으로 다시 적용") }
                 }
             }
-            val list = items
+            val st = scheduleState
             when {
-                list == null -> item { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
-                list.isEmpty() -> item { CenterText("진행중인 계약의 다가오는 일정이 없습니다.\n(임대차 만기, 잔금일 등)") }
-                else -> items(list, key = { it.event.key }) { item ->
-                    EventCard(
-                        item,
-                        onOpenFolder = { item.event.folderId?.let(onOpenFolder) },
-                        onPlan = { editing = item },
-                        onEdit = { editingEvent = item.event },
-                    )
+                st == null -> item { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+                else -> {
+                    if (st.items.isEmpty()) item { CenterText("날짜가 정해진 다가오는 일정이 없습니다.") }
+                    items(st.items, key = { it.event.key }) { item ->
+                        EventCard(
+                            item,
+                            onOpenFolder = { item.event.folderId?.let(onOpenFolder) },
+                            onPlan = { editing = item },
+                            onEdit = { editingEvent = item.event },
+                        )
+                    }
+                    if (st.undated.isNotEmpty()) {
+                        item {
+                            Column(Modifier.padding(top = 12.dp)) {
+                                Text("다음 일정이 없는 진행중 계약 ${st.undated.size}", color = Brand.Navy, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    "계약서에서 만기·잔금일 등 날짜를 찾지 못했어요. 보유 중이거나 날짜가 빠진 계약입니다. 다음 단계를 일정으로 정해 두세요.",
+                                    color = Brand.TextSub,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp,
+                                )
+                            }
+                        }
+                        items(st.undated, key = { "u-" + it.id }) { f ->
+                            Card(
+                                Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color.White),
+                            ) {
+                                Row(Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f).clickable { onOpenFolder(f.id) }) {
+                                        Text(f.name, color = Brand.Blue, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                        val last = f.summaryEntries.lastOrNull { it.ongoing } ?: f.summaryEntries.lastOrNull()
+                                        last?.let {
+                                            Text(
+                                                highlightSummary(com.happyfamily.contract.data.SummaryText.line(it)),
+                                                color = Brand.TextSub,
+                                                fontSize = 12.sp,
+                                                maxLines = 2,
+                                            )
+                                        }
+                                    }
+                                    TextButton(onClick = { adding = f.id to f.name }) { Text("+ 일정") }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -249,16 +295,16 @@ fun ScheduleScreen(onBack: () -> Unit, onOpenFolder: (String) -> Unit, vm: Sched
             onDelete = { vm.deleteEvent(e); editingEvent = null },
         )
     }
-    if (adding) {
+    adding?.let { (folderId, folderName) ->
         EventEditDialog(
-            title = "일정 추가",
+            title = if (folderName.isBlank()) "일정 추가" else "$folderName 일정 추가",
             initialType = "",
             initialDate = java.time.LocalDate.now().plusMonths(1).toString(),
             initialDetail = "",
-            initialFolderName = "",
-            folderEditable = true,
-            onDismiss = { adding = false },
-            onSave = { type, date, detail, folder -> vm.addEvent(folder, type, date, detail); adding = false },
+            initialFolderName = folderName,
+            folderEditable = folderId == null,
+            onDismiss = { adding = null },
+            onSave = { type, date, detail, folder -> vm.addEvent(folderId, folder, type, date, detail); adding = null },
             onDelete = null,
         )
     }
@@ -313,7 +359,11 @@ private fun EventCard(item: ScheduleItem, onOpenFolder: () -> Unit, onPlan: () -
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                if (e.custom) Badge("직접 추가", Brand.TextSub) else if (e.edited) Badge("수정함", Brand.TextSub)
+                when {
+                    e.custom -> Badge("직접 추가", Brand.TextSub)
+                    e.edited -> Badge("수정함", Brand.TextSub)
+                    e.estimated -> Badge("예상", Brand.Violet)
+                }
                 IconButton(onClick = onEdit) {
                     Icon(Icons.Outlined.Edit, contentDescription = "일정 고치기·지우기", tint = Brand.TextSub, modifier = Modifier.size(20.dp))
                 }

@@ -27,6 +27,8 @@ data class ScheduleEvent(
     val custom: Boolean = false,
     /** 사용자가 고친 일정 */
     val edited: Boolean = false,
+    /** 계약서에 날짜가 없어 계산한 예상 일정 (묵시적 갱신 가정 등) */
+    val estimated: Boolean = false,
 ) {
     /** 알림·계획·수정 기록을 붙일 때 쓰는 고유 키 */
     val key: String get() = origin ?: "$contractId|$type|$date"
@@ -102,33 +104,57 @@ object ScheduleRepository {
     private fun isValidDate(s: String) = runCatching { LocalDate.parse(s) }.isSuccess
 
     /**
-     * 진행중 폴더(와 아직 폴더가 없는 계약서)의 계약서에서 오늘 이후 일정을 뽑는다.
-     * 이미 끝난(진행중이 아닌) 임대차의 만기는 넣지 않는다.
+     * 진행중 폴더(와 아직 폴더가 없는 계약서)의 계약서에서 다음 일정을 뽑는다.
+     *  - 임대차는 폴더마다 가장 최근 계약 하나의 만기만 본다 (갱신 전 옛 계약은 제외).
+     *    만기가 이미 지났는데 진행중이면 같은 기간으로 묵시적 갱신됐다고 보고 다음 만기를 "예상"으로 계산한다.
+     *  - 중도금·잔금·취득 예정일은 오늘 이후인 것만.
      */
     fun events(folders: List<Folder>, contracts: List<Contract>): List<ScheduleEvent> {
         val today = today()
         val byId = folders.associateBy { it.id }
         val out = mutableListOf<ScheduleEvent>()
-        for (c in contracts) {
-            val a = c.analysis ?: continue
+        val active = contracts.filter { c ->
+            c.analysis != null && (c.folderId?.let { byId[it] }?.status ?: FolderStatus.ONGOING) == FolderStatus.ONGOING
+        }
+
+        // 1) 임대차 만기: 폴더(없으면 계약서)마다 가장 최근 임대차 하나
+        active.filter { it.analysis!!.isLease }
+            .groupBy { it.folderId ?: it.id }
+            .forEach { (_, leases) ->
+                val c = leases.maxBy { (it.analysis!!.leaseEnd.ifBlank { it.analysis.representativeDate }) }
+                val a = c.analysis!!
+                val folder = c.folderId?.let { byId[it] }
+                val name = folder?.name ?: c.title
+                val money = if (a.monthlyRent > 0) {
+                    "보증금 ${formatWonKr(a.deposit)} / 월 ${formatWonKr(a.monthlyRent)}"
+                } else {
+                    "보증금 ${formatWonKr(a.deposit)}"
+                }
+                val parties = "${a.ownerLabel} ${a.lessor.name} / ${a.userLabel} ${a.lessee.name}"
+                val end = a.leaseEnd
+                when {
+                    end.isNotBlank() && isValidDate(end) && end >= today ->
+                        out += ScheduleEvent(folder?.id, name, c.id, "임대차 만기", end, "${a.contractType} · $money · $parties")
+                    end.isNotBlank() && isValidDate(end) -> {
+                        // 만기가 지났는데 진행중 → 묵시적 갱신 가정: 같은 기간을 더해 다음 만기 예상
+                        val next = projectRenewal(a.leaseStart, end, today)
+                        out += ScheduleEvent(
+                            folder?.id, name, c.id, "갱신 만기", next,
+                            "원래 만기 ${formatShortDate(end)} 지남 · 묵시적 갱신 가정(확인 필요) · ${a.contractType} · $money · $parties",
+                            estimated = true,
+                        )
+                    }
+                }
+            }
+
+        // 2) 중도금·잔금·취득 예정
+        for (c in active) {
+            val a = c.analysis!!
             val folder = c.folderId?.let { byId[it] }
-            if (folder != null && folder.status != FolderStatus.ONGOING) continue
             val name = folder?.name ?: c.title
             fun add(type: String, date: String, detail: String) {
                 if (date.isNotBlank() && isValidDate(date) && date >= today) {
                     out += ScheduleEvent(folder?.id, name, c.id, type, date, detail)
-                }
-            }
-            if (a.isLease) {
-                // 폴더 정리에서 끝난 계약으로 판단된 임대차는 건너뛴다.
-                val entry = folder?.summaryEntries?.firstOrNull { it.contractId == c.id }
-                if (entry == null || entry.ongoing) {
-                    val money = if (a.monthlyRent > 0) {
-                        "보증금 ${formatWonKr(a.deposit)} / 월 ${formatWonKr(a.monthlyRent)}"
-                    } else {
-                        "보증금 ${formatWonKr(a.deposit)}"
-                    }
-                    add("임대차 만기", a.leaseEnd, "${a.contractType} · $money · ${a.ownerLabel} ${a.lessor.name} / ${a.userLabel} ${a.lessee.name}")
                 }
             }
             a.middlePayments.forEachIndexed { i, p ->
@@ -139,7 +165,6 @@ object ScheduleRepository {
                 add("취득 예정", a.acquisitionDate, formatWonKr(a.acquisitionAmount))
             }
         }
-        // 같은 서류가 두 번 올라간 경우 등: 같은 폴더·같은 종류·같은 날짜는 하나만
         return out.distinctBy { "${it.folderId ?: it.contractId}|${it.type}|${it.date}" }.sortedBy { it.date }
     }
 
@@ -235,6 +260,24 @@ object ScheduleRepository {
         val list = edits().whereEqualTo("kind", "edit").get().await().documents
         list.forEach { it.reference.delete().await() }
         return list.size
+    }
+
+    /** 만기가 지난 임대차를 같은 기간(모르면 2년)으로 갱신했다고 보고, 오늘 이후 첫 만기를 돌려준다. */
+    fun projectRenewal(start: String, end: String, today: String): String {
+        val e = LocalDate.parse(end)
+        val s = runCatching { LocalDate.parse(start) }.getOrNull()
+        val months = if (s != null && s.isBefore(e)) ChronoUnit.MONTHS.between(s, e.plusDays(1)).coerceIn(6, 120) else 24
+        var next = e
+        val t = LocalDate.parse(today)
+        var guard = 0
+        while (next.isBefore(t) && guard++ < 50) next = next.plusMonths(months)
+        return next.toString()
+    }
+
+    /** 진행중인데 다음 일정(날짜)이 하나도 없는 폴더 — 다음 단계를 정하도록 따로 보여 준다. */
+    fun foldersWithoutEvents(folders: List<Folder>, events: List<ScheduleEvent>): List<Folder> {
+        val withEvents = events.mapNotNull { it.folderId }.toSet()
+        return folders.filter { it.status == FolderStatus.ONGOING && it.id !in withEvents }.sortedBy { it.name }
     }
 
     fun plansFlow(): Flow<List<Plan>> = callbackFlow {

@@ -60,4 +60,31 @@ class StakeholderScheduleTest {
         val doneFolder = folder.copy(status = FolderStatus.DONE)
         assertEquals(0, ScheduleRepository.events(listOf(doneFolder), listOf(ongoing)).size)
     }
+
+    @Test
+    fun `만기 지난 진행중 임대차는 묵시적 갱신 만기를 예상으로`() {
+        val start = LocalDate.now().minusYears(2).minusMonths(3)
+        val end = start.plusYears(2).minusDays(1) // 3개월 전에 끝난 2년 계약
+        val lease = SampleData.contract(
+            "y1",
+            SampleData.analysis("월세", start.toString(), "유지헌", "박세입", deposit = 70_000_000, rent = 3_000_000, start = start.toString(), end = end.toString()),
+            folderId = "f9",
+        )
+        val folder = SampleData.folder("f9", "테라스원", "유지헌", listOf(lease)).copy(status = FolderStatus.ONGOING)
+        val events = ScheduleRepository.events(listOf(folder), listOf(lease))
+        assertEquals(1, events.size)
+        assertEquals("갱신 만기", events[0].type)
+        assertTrue(events[0].estimated)
+        assertEquals(end.plusMonths(24).toString(), events[0].date) // 같은 2년을 더함
+        assertTrue(events[0].detail.contains("묵시적 갱신"))
+    }
+
+    @Test
+    fun `날짜 있는 일정이 없는 진행중 폴더는 따로 모은다`() {
+        val owned = SampleData.contract("z1", SampleData.analysis("매매", "2019-03-02", "김매도", "유지헌", sale = 500_000_000), folderId = "f8")
+        val folder = SampleData.folder("f8", "과천 온온빌 303호", "유지헌", listOf(owned)).copy(status = FolderStatus.ONGOING)
+        val events = ScheduleRepository.events(listOf(folder), listOf(owned))
+        assertEquals(0, events.size)
+        assertEquals(listOf("과천 온온빌 303호"), ScheduleRepository.foldersWithoutEvents(listOf(folder), events).map { it.name })
+    }
 }
