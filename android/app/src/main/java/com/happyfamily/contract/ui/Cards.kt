@@ -1,6 +1,9 @@
 package com.happyfamily.contract.ui
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +21,8 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.FactCheck
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.outlined.ErrorOutline
@@ -205,15 +210,16 @@ fun keyAmountText(a: ContractAnalysis): String = when (a.contractType) {
 
 /** 부동산(계약 폴더) 카드 */
 @Composable
-fun FolderCard(folder: Folder, contractCount: Int, onClick: () -> Unit) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-    ) {
+fun FolderCard(
+    folder: Folder,
+    contractCount: Int,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean? = null,
+) {
+    SelectableCard(onClick, onLongClick, selected) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            SelectCheck(selected)
             Thumbnail(folder.thumbnail, size = 68.dp)
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
@@ -258,15 +264,16 @@ fun FolderCard(folder: Folder, contractCount: Int, onClick: () -> Unit) {
 
 /** 계약서 한 건 카드. [ongoing] 이면 "현재 진행중" 표시. */
 @Composable
-fun ContractCard(contract: Contract, onClick: () -> Unit, ongoing: Boolean = false) {
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-    ) {
+fun ContractCard(
+    contract: Contract,
+    onClick: () -> Unit,
+    ongoing: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean? = null,
+) {
+    SelectableCard(onClick, onLongClick, selected) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            SelectCheck(selected)
             Thumbnail(contract.thumbnail)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -338,4 +345,38 @@ fun ContractCard(contract: Contract, onClick: () -> Unit, ongoing: Boolean = fal
             }
         }
     }
+}
+
+/** 누르기·길게 누르기를 받고, 선택되면 파란 테두리가 생기는 흰 카드 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SelectableCard(
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)?,
+    selected: Boolean?,
+    content: @Composable () -> Unit,
+) {
+    val shape = RoundedCornerShape(20.dp)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        shape = shape,
+        colors = CardDefaults.cardColors(containerColor = if (selected == true) Brand.CardTint else Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = if (selected == true) BorderStroke(2.dp, Brand.Blue) else null,
+    ) { content() }
+}
+
+/** 선택 모드일 때만 보이는 체크 표시 */
+@Composable
+private fun SelectCheck(selected: Boolean?) {
+    if (selected == null) return
+    Icon(
+        if (selected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+        contentDescription = if (selected) "선택됨" else "선택 안 됨",
+        tint = if (selected) Brand.Blue else Brand.Divider,
+        modifier = Modifier.padding(end = 10.dp).size(26.dp),
+    )
 }

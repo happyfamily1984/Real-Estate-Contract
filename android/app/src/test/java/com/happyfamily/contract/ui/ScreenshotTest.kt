@@ -37,6 +37,9 @@ class ScreenshotTest {
     fun homeFolders() = shot("home_folders.png") { Home(SampleData.homeState()) }
 
     @Test
+    fun homeMerge() = shot("home_merge.png") { Home(SampleData.homeState(), selecting = setOf("f1", "f2")) }
+
+    @Test
     fun folder() = shot("folder.png") {
         FolderContent(
             folder = SampleData.folders[0],
@@ -52,7 +55,7 @@ class ScreenshotTest {
     }
 
     @Composable
-    private fun Home(state: HomeState) {
+    private fun Home(state: HomeState, selecting: Set<String>? = null) {
         HomeContent(
             state = state,
             query = "",
@@ -63,6 +66,7 @@ class ScreenshotTest {
             loadError = null,
             snackbar = remember { SnackbarHostState() },
             onPickFiles = {}, onScan = {}, onStakeholders = {}, onSignOut = {}, onOpenFolder = {}, onOpenContract = {},
+            selecting = selecting,
         )
     }
 }

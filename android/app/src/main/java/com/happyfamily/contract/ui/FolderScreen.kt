@@ -14,6 +14,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material.icons.automirrored.outlined.CallSplit
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -118,6 +122,7 @@ fun FolderScreen(
         onExport = { f?.let { exportTextFile(context, "${it.name}_계약내용정리", SummaryText.folderDocument(it)) } },
         onDelete = { vm.delete(onBack) },
         onOpenContract = onOpenContract,
+        onSplit = vm::split,
     )
 }
 
@@ -143,8 +148,12 @@ internal fun FolderContent(
     onExport: () -> Unit,
     onDelete: () -> Unit,
     onOpenContract: (String) -> Unit,
+    onSplit: (List<Contract>, String) -> Unit = { _, _ -> },
 ) {
     var renaming by remember { mutableStateOf(false) }
+    /** null 이면 보통 화면, 아니면 분리하려고 고른 계약서 id 들 */
+    var selecting by remember { mutableStateOf<Set<String>?>(null) }
+    var splitting by remember { mutableStateOf(false) }
     var choosingStatus by remember { mutableStateOf(false) }
     var choosingStakeholder by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -167,6 +176,34 @@ internal fun FolderContent(
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, titleContentColor = Brand.Navy),
             )
+        },
+        bottomBar = {
+            selecting?.let { sel ->
+                val all = sel.size == contracts.size
+                Column(Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding().padding(16.dp)) {
+                    Text(
+                        if (all) "모든 계약서를 고르면 분리할 수 없어요. 폴더 이름을 바꾸려면 이름을 누르세요."
+                        else "다른 부동산인 계약서를 고른 뒤 '분리하기'를 누르세요.",
+                        color = Brand.TextSub,
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        WhitePillButton(text = "취소", icon = Icons.Outlined.Close, onClick = { selecting = null }, height = 52.dp)
+                        GradientPillButton(
+                            text = "분리하기 (${sel.size})",
+                            onClick = { splitting = true },
+                            enabled = sel.isNotEmpty() && !all,
+                            showArrow = false,
+                            height = 52.dp,
+                            modifier = Modifier.weight(1f).alpha(if (sel.isNotEmpty() && !all) 1f else 0.5f),
+                            leading = {
+                                Icon(Icons.AutoMirrored.Outlined.CallSplit, contentDescription = null, tint = Color.White)
+                            },
+                        )
+                    }
+                }
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
@@ -233,6 +270,9 @@ internal fun FolderContent(
                     Spacer(Modifier.width(6.dp))
                     Text("${contracts.size}", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
+                    if (selecting == null && contracts.size >= 2) {
+                        TextButton(onClick = { selecting = emptySet() }) { Text("골라서 분리") }
+                    }
                     TextButton(onClick = onToggleSort) {
                         Icon(Icons.Outlined.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
@@ -241,11 +281,33 @@ internal fun FolderContent(
                 }
             }
             items(contracts, key = { it.id }) { c ->
-                ContractCard(c, onClick = { onOpenContract(c.id) }, ongoing = c.id in ongoingIds)
+                val toggle = { selecting = selecting?.let { if (c.id in it) it - c.id else it + c.id } }
+                ContractCard(
+                    contract = c,
+                    onClick = { if (selecting != null) toggle() else onOpenContract(c.id) },
+                    ongoing = c.id in ongoingIds,
+                    // 길게 누르면 분리할 계약서 고르기를 시작한다.
+                    onLongClick = { if (selecting == null) selecting = setOf(c.id) else toggle() },
+                    selected = selecting?.contains(c.id),
+                )
             }
         }
     }
 
+    if (folder != null && splitting) {
+        val chosen = contracts.filter { it.id in selecting.orEmpty() }
+        TextInputDialog(
+            title = "새 폴더로 분리 (${chosen.size}건)",
+            initial = chosen.firstNotNullOfOrNull { it.analysis?.folderName?.takeIf { n -> n.isNotBlank() } } ?: "",
+            hint = "새 폴더 이름 (예: 목동 건영)",
+            onDismiss = { splitting = false },
+            onConfirm = { name ->
+                splitting = false
+                selecting = null
+                onSplit(chosen, name)
+            },
+        )
+    }
     if (folder != null && renaming) {
         TextInputDialog(
             title = "폴더 이름",

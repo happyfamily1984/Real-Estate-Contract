@@ -4,6 +4,12 @@ import android.app.Activity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.outlined.CallMerge
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -84,6 +90,9 @@ fun HomeScreen(
     val message by importVm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     var confirmSignOut by remember { mutableStateOf(false) }
+    /** null 이면 보통 화면, 아니면 합치기 위해 고른 폴더 id 들 */
+    var selecting by remember { mutableStateOf<Set<String>?>(null) }
+    var mergeTargets by remember { mutableStateOf<List<Folder>?>(null) }
 
     LaunchedEffect(message) {
         message?.let {
@@ -114,7 +123,29 @@ fun HomeScreen(
             viewModel.restartAnalysis()
             scope.launch { snackbar.showSnackbar("분석을 처음부터 다시 시작했어요.") }
         },
+        selecting = selecting,
+        onStartSelect = { first -> selecting = setOfNotNull(first) },
+        onToggleSelect = { id -> selecting = selecting?.let { if (id in it) it - id else it + id } },
+        onCancelSelect = { selecting = null },
+        onMerge = {
+            val all = state?.let { it.ongoing + it.done }.orEmpty()
+            mergeTargets = all.filter { it.id in selecting.orEmpty() }
+        },
     )
+
+    mergeTargets?.let { folders ->
+        MergeDialog(
+            folders = folders,
+            onDismiss = { mergeTargets = null },
+            onConfirm = { target, name ->
+                mergeTargets = null
+                selecting = null
+                viewModel.merge(target.id, folders.map { it.id }, name) { msg ->
+                    scope.launch { snackbar.showSnackbar(msg) }
+                }
+            },
+        )
+    }
 
     if (confirmSignOut) {
         AlertDialog(
@@ -151,6 +182,11 @@ internal fun HomeContent(
     onOpenFolder: (String) -> Unit,
     onOpenContract: (String) -> Unit,
     onRestartAnalysis: () -> Unit = {},
+    selecting: Set<String>? = null,
+    onStartSelect: (String?) -> Unit = {},
+    onToggleSelect: (String) -> Unit = {},
+    onCancelSelect: () -> Unit = {},
+    onMerge: () -> Unit = {},
 ) {
     Scaffold(
         containerColor = Color.Transparent,
@@ -187,7 +223,21 @@ internal fun HomeContent(
             }
         },
         floatingActionButton = {
-            if (upload == null) {
+            if (selecting != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    WhitePillButton(text = "취소", icon = Icons.Outlined.Close, onClick = onCancelSelect)
+                    GradientPillButton(
+                        text = "합치기 (${selecting.size})",
+                        onClick = onMerge,
+                        enabled = selecting.size >= 2,
+                        showArrow = false,
+                        modifier = Modifier.alpha(if (selecting.size >= 2) 1f else 0.5f),
+                        leading = {
+                            Icon(Icons.Outlined.CallMerge, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+                        },
+                    )
+                }
+            } else if (upload == null) {
                 // 휴대폰에 있는 PDF·JPG 파일 업로드 + 카메라로 촬영
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     WhitePillButton(text = "파일 업로드", icon = Icons.Outlined.UploadFile, onClick = onPickFiles)
@@ -218,7 +268,17 @@ internal fun HomeContent(
                 state == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 state.isEmpty -> EmptyState()
                 else -> {
-                    StakeholderChips(state, stakeholderFilter, onStakeholderFilter, onStakeholders)
+                    if (selecting != null) {
+                        Text(
+                            "같은 부동산 폴더를 2개 이상 고르세요.",
+                            color = Brand.Blue,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                        )
+                    } else {
+                        StakeholderChips(state, stakeholderFilter, onStakeholderFilter, onStakeholders)
+                    }
                     val nothing = state.unfiled.isEmpty() && state.ongoing.isEmpty() && state.done.isEmpty()
                     if (nothing) {
                         CenterText("검색 결과가 없습니다.")
@@ -233,8 +293,18 @@ internal fun HomeContent(
                                     ContractCard(c, onClick = { onOpenContract(c.id) })
                                 }
                             }
-                            folderSection("진행중", state.ongoing, state.contractCounts, onOpenFolder)
-                            folderSection("완료", state.done, state.contractCounts, onOpenFolder)
+                            val folderClick: (Folder) -> Unit = { f ->
+                                if (selecting != null) onToggleSelect(f.id) else onOpenFolder(f.id)
+                            }
+                            val canMerge = selecting == null && state.ongoing.size + state.done.size >= 2
+                            folderSection(
+                                "진행중", state.ongoing, state.contractCounts, selecting, folderClick, onStartSelect,
+                                actionLabel = if (canMerge) "폴더 합치기" else null,
+                            )
+                            folderSection(
+                                "완료", state.done, state.contractCounts, selecting, folderClick, onStartSelect,
+                                actionLabel = if (canMerge && state.ongoing.isEmpty()) "폴더 합치기" else null,
+                            )
                         }
                     }
                 }
@@ -328,11 +398,65 @@ private fun LazyListScope.folderSection(
     title: String,
     folders: List<Folder>,
     counts: Map<String, Int>,
-    onOpenFolder: (String) -> Unit,
+    selecting: Set<String>?,
+    onClick: (Folder) -> Unit,
+    onStartSelect: (String?) -> Unit,
+    actionLabel: String? = null,
 ) {
     if (folders.isEmpty()) return
-    sectionHeader(title, folders.size)
+    sectionHeader(title, folders.size, actionLabel = actionLabel, onAction = { onStartSelect(null) })
     items(folders, key = { "f-" + it.id }) { f ->
-        FolderCard(f, counts[f.id] ?: 0, onClick = { onOpenFolder(f.id) })
+        FolderCard(
+            folder = f,
+            contractCount = counts[f.id] ?: 0,
+            onClick = { onClick(f) },
+            // 길게 누르면 합치기 선택을 시작한다.
+            onLongClick = { if (selecting == null) onStartSelect(f.id) else onClick(f) },
+            selected = selecting?.contains(f.id),
+        )
     }
+}
+
+/** 합칠 폴더들 중 남길 폴더(이름)를 고른다. */
+@Composable
+private fun MergeDialog(folders: List<Folder>, onDismiss: () -> Unit, onConfirm: (Folder, String) -> Unit) {
+    var target by remember { mutableStateOf(folders.first()) }
+    var name by remember { mutableStateOf(folders.first().name) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("폴더 ${folders.size}개 합치기") },
+        text = {
+            Column {
+                Text(
+                    "고른 폴더의 계약서를 모두 한 폴더로 모읍니다. 남길 폴더를 고르세요 (이해관계자·상태는 이 폴더 것을 씁니다).",
+                    color = Brand.TextSub,
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                folders.forEach { f ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { target = f; name = f.name }.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = target.id == f.id, onClick = { target = f; name = f.name })
+                        Column {
+                            Text(f.name)
+                            if (f.address.isNotBlank()) Text(f.address, color = Brand.TextSub, fontSize = 12.sp, maxLines = 1)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it.take(30) },
+                    singleLine = true,
+                    label = { Text("합친 폴더 이름") },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onConfirm(target, name.trim()) }, enabled = name.isNotBlank()) { Text("합치기") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
+    )
 }

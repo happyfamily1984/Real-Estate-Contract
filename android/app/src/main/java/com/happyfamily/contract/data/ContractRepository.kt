@@ -221,6 +221,21 @@ object ContractRepository {
         ).await()
     }
 
+    /** 여러 계약서를 한 번에(모두 되거나 모두 안 되게) 다른 폴더로 옮긴다. */
+    suspend fun setFolderAll(ids: Collection<String>, folderId: String) {
+        val uid = uid()
+        ids.chunked(400).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { id ->
+                batch.update(
+                    contracts(uid).document(id),
+                    mapOf("folderId" to folderId, "updatedAt" to FieldValue.serverTimestamp()),
+                )
+            }
+            batch.commit().await()
+        }
+    }
+
     suspend fun get(id: String): Contract? =
         contracts(uid()).document(id).get().await().takeIf { it.exists() }?.let(Contract::from)
 

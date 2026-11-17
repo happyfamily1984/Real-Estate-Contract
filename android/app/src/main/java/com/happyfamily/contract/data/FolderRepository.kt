@@ -119,6 +119,53 @@ object FolderRepository {
         folders().document(id).delete().await()
     }
 
+    /**
+     * 같은 부동산인데 따로 만들어진 폴더들을 [targetId] 하나로 합친다.
+     * 다른 폴더의 계약서를 모두 옮기고 빈 폴더는 지운다. 이름을 주면 바꾼다.
+     * 합친 폴더의 정리를 다시 만들도록 예약하고, 사용자가 직접 고친 정리라 건드리지 않았으면 true 를 돌려준다.
+     */
+    suspend fun mergeFolders(context: Context, targetId: String, otherIds: List<String>, name: String?): Boolean {
+        val target = get(targetId) ?: error("합칠 폴더를 찾을 수 없습니다.")
+        val others = otherIds.filter { it != targetId }
+        for (id in others) {
+            val ids = ContractRepository.contractsInFolder(id).map { it.first.id }
+            if (ids.isNotEmpty()) ContractRepository.setFolderAll(ids, targetId)
+            folders().document(id).delete().await()
+        }
+        val fields = buildMap<String, Any?> {
+            if (!name.isNullOrBlank() && name != target.name) put("name", name.trim().take(30))
+            // 주소·사진이 비어 있었으면 합친 폴더의 것으로 채운다.
+            if (target.address.isBlank() || target.thumbnail == null) {
+                val first = ContractRepository.contractsInFolder(targetId).map { it.first }.firstOrNull { it.analysis != null }
+                if (target.address.isBlank() && first?.analysis != null) put("address", first.analysis.propertyAddress)
+                if (target.thumbnail == null && first?.thumbnail != null) put("thumbnail", Blob.fromBytes(first.thumbnail))
+            }
+        }
+        if (fields.isNotEmpty()) update(targetId, fields)
+        SummaryWorker.enqueue(context, targetId, force = false)
+        return target.summaryEdited
+    }
+
+    /**
+     * 폴더 안에서 고른 계약서들을 새 폴더로 분리한다. 새 폴더 id 를 돌려준다.
+     * 이해관계자는 원래 폴더 것을 그대로 쓰고, 두 폴더 모두 정리를 다시 만들도록 예약한다.
+     */
+    suspend fun splitContracts(context: Context, sourceId: String, contracts: List<Contract>, name: String): String {
+        require(contracts.isNotEmpty()) { "분리할 계약서를 골라 주세요." }
+        val source = get(sourceId)
+        val first = contracts.firstOrNull { it.analysis != null } ?: contracts.first()
+        val newId = createFolder(
+            name = name.ifBlank { first.analysis?.folderName.orEmpty() }.ifBlank { "새 계약 폴더" },
+            address = first.analysis?.propertyAddress.orEmpty(),
+            stakeholder = source?.stakeholder.orEmpty(),
+            thumbnail = first.thumbnail,
+        )
+        ContractRepository.setFolderAll(contracts.map { it.id }, newId)
+        SummaryWorker.enqueue(context, newId, force = false)
+        SummaryWorker.enqueue(context, sourceId, force = false)
+        return newId
+    }
+
     // ---------- 이해관계자 ----------
 
     suspend fun allStakeholders(): List<Stakeholder> =

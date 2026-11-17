@@ -70,6 +70,24 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { runCatching { AnalyzeWorker.recoverStuck(getApplication(), force = true) } }
     }
 
+    /** 같은 부동산 폴더 합치기. 끝나면 안내 문구를 [onDone] 으로 알려 준다. */
+    fun merge(targetId: String, folderIds: List<String>, name: String, onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val edited = FolderRepository.mergeFolders(getApplication(), targetId, folderIds, name)
+                onDone(
+                    if (edited) {
+                        "폴더를 합쳤어요. 직접 고친 정리는 그대로 두었으니, 폴더에서 '계약서 내용적용'을 누르면 합친 내용으로 다시 정리합니다."
+                    } else {
+                        "폴더 ${folderIds.size}개를 합쳤어요. 계약내용정리를 다시 만들고 있어요."
+                    },
+                )
+            } catch (e: Exception) {
+                onDone("합치지 못했습니다: ${e.message}")
+            }
+        }
+    }
+
     init {
         // 폴더 기능 이전에 저장된 계약서를 폴더로 옮긴다.
         viewModelScope.launch { runCatching { FolderRepository.fileUnfiledContracts(getApplication()) } }

@@ -77,6 +77,12 @@ class FolderViewModel(application: Application, val folderId: String) : AndroidV
     /** 계약서 내용적용: 저장해 둔 핵심 텍스트로 다시 정리 (직접 고친 내용은 덮어씀) */
     fun apply() = SummaryWorker.enqueue(getApplication(), folderId, force = true)
 
+    /** 고른 계약서들을 새 폴더로 분리 */
+    fun split(contracts: List<Contract>, name: String) = run {
+        FolderRepository.splitContracts(getApplication(), folderId, contracts, name)
+        _message.value = "계약서 ${contracts.size}건을 새 폴더 '${name.ifBlank { "새 계약 폴더" }}'(으)로 분리했어요. 홈 화면에서 볼 수 있어요."
+    }
+
     fun delete(onDone: () -> Unit) = run {
         _deleted.value = true
         FolderRepository.deleteFolder(folderId)
