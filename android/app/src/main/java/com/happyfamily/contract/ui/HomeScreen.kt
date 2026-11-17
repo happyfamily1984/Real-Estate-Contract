@@ -1,5 +1,6 @@
 package com.happyfamily.contract.ui
 
+import androidx.activity.compose.BackHandler
 import android.app.Activity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -111,6 +112,20 @@ fun HomeScreen(
             snackbar.showSnackbar(it)
             importVm.consumeMessage()
         }
+    }
+
+    // 뒤로가기: 폴더 고르는 중이면 고르기 취소, 아니면 "앱을 종료하겠습니까?"
+    var confirmExit by remember { mutableStateOf(false) }
+    BackHandler {
+        if (selecting != null) selecting = null else confirmExit = true
+    }
+    if (confirmExit) {
+        AlertDialog(
+            onDismissRequest = { confirmExit = false },
+            title = { Text("앱을 종료하겠습니까?") },
+            confirmButton = { TextButton(onClick = { confirmExit = false; activity.finish() }) { Text("예") } },
+            dismissButton = { TextButton(onClick = { confirmExit = false }) { Text("아니요") } },
+        )
     }
 
     val importer = rememberImporter(importVm, folderId = null, onCreated = onOpenContract)

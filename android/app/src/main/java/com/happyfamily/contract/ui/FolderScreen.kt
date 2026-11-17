@@ -1,5 +1,6 @@
 package com.happyfamily.contract.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -169,6 +170,8 @@ internal fun FolderContent(
     var selecting by remember { mutableStateOf<Set<String>?>(null) }
     var splitting by remember { mutableStateOf(false) }
     var mergingContracts by remember { mutableStateOf(false) }
+    // 뒤로가기: 계약서 고르는 중이면 고르기만 취소
+    BackHandler(enabled = selecting != null) { selecting = null }
     var choosingStatus by remember { mutableStateOf(false) }
     var choosingStakeholder by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }

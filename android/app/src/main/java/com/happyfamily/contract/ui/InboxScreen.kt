@@ -1,5 +1,6 @@
 package com.happyfamily.contract.ui
 
+import androidx.activity.compose.BackHandler
 import android.app.Application
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -135,6 +136,8 @@ fun InboxScreen(
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     /** 폴더 고르기 창을 띄울 대상 */
     var moving by remember { mutableStateOf<List<Contract>?>(null) }
+    // 뒤로가기: 고른 것이 있으면 선택만 해제
+    BackHandler(enabled = selected.isNotEmpty()) { selected = emptySet() }
 
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.message.value = null } }
     // 목록에서 사라진 것은 선택에서도 뺀다. 다 정리하면 화면을 닫는다.

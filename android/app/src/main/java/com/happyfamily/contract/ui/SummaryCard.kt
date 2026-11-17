@@ -1,5 +1,6 @@
 package com.happyfamily.contract.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -67,6 +68,8 @@ fun SummaryCard(
 ) {
     var editing by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf(text) }
+    // 뒤로가기: 수정 중이면 수정만 취소
+    BackHandler(enabled = editing) { editing = false }
 
     Card(
         modifier = modifier.fillMaxWidth(),

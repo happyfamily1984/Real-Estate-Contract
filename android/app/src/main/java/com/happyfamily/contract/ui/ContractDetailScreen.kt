@@ -1,5 +1,6 @@
 package com.happyfamily.contract.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -94,6 +95,8 @@ fun ContractDetailScreen(
     /** null 이면 보통 화면, 아니면 옮기려고 고른 페이지 번호들 */
     var pageSel by remember { mutableStateOf<Set<Int>?>(null) }
     var movingPages by remember { mutableStateOf(false) }
+    // 뒤로가기: 페이지 고르는 중이면 고르기만 취소
+    BackHandler(enabled = pageSel != null) { pageSel = null }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var confirmDelete by remember { mutableStateOf(false) }
