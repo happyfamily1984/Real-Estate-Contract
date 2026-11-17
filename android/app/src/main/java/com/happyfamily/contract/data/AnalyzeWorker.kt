@@ -10,9 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import com.google.firebase.ai.type.QuotaExceededException
-import com.google.firebase.ai.type.RequestTimeoutException
-import com.google.firebase.ai.type.ServerException
+import com.happyfamily.contract.data.ai.AllAiUnavailableException
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.NonCancellable
@@ -20,7 +18,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * 계약서 분석을 백그라운드에서 실행한다. 앱 화면을 벗어나도 계속 진행되고,
+ * 계약서 분석을 백그라운드에서 실행한다. AI 를 쓸 수 없으면 휴대폰 안 글자 인식으로 기본 분석을 하고,
+ * 나중에 [UpgradeWorker] 가 AI 로 다시 분석한다. 앱 화면을 벗어나도 계속 진행되고,
  * 네트워크가 끊기면 연결될 때까지 기다렸다가 다시 시도한다.
  */
 class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -32,15 +31,31 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             return if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.success()
         }
 
+        val upgrade = inputData.getBoolean(KEY_UPGRADE, false)
         return try {
             val contract = ContractRepository.get(id) ?: return Result.success() // 지워진 계약서
-            if (contract.status == ContractStatus.DONE) return Result.success() // 이미 끝남 (중복 예약)
+            if (upgrade) {
+                // 기본 분석(휴대폰)으로 끝난 계약서만 AI 로 다시 분석한다.
+                if (contract.status != ContractStatus.DONE || contract.analysis?.isLocal != true) return Result.success()
+            } else {
+                if (contract.status == ContractStatus.DONE) return Result.success() // 이미 끝남 (중복 예약)
+                ContractRepository.setStatus(id, "processing")
+            }
 
-            ContractRepository.setStatus(id, "processing")
             val pages = ContractRepository.allPageImages(id, contract.pageCount)
             val folders = runCatching { FolderRepository.allFolders() }.getOrDefault(emptyList())
-            val result = withTimeoutOrNull(AI_TIMEOUT_MS) { GeminiAnalyzer.analyze(applicationContext, pages, folders) }
-                ?: throw java.io.IOException("AI 응답이 ${AI_TIMEOUT_MS / 60_000}분 넘게 오지 않았습니다.")
+
+            // 1) AI (Firebase 모델들 → 내 API 키들)  2) 모두 안 되면 휴대폰 안 글자 인식
+            val result = try {
+                withTimeoutOrNull(AI_TIMEOUT_MS) { GeminiAnalyzer.analyze(applicationContext, pages, folders) }
+                    ?: throw AllAiUnavailableException(listOf("AI 응답이 ${AI_TIMEOUT_MS / 60_000}분 넘게 오지 않았습니다."))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // 한도 소진·서버 오류·메모리 부족 등 AI 쪽 어떤 문제든 → 휴대폰 안 분석으로 대신
+                if (upgrade) return Result.success() // 아직 AI 를 못 씀 → 기본 분석 결과 유지
+                LocalAnalyzer.analyze(pages)
+            }
             val matchFolderId = result["matchFolderId"] as? String
             ContractRepository.saveAnalysis(id, result - "matchFolderId")
 
@@ -55,13 +70,15 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             // 시스템이 작업을 멈춤 (네트워크 끊김 등) → WorkManager 가 나중에 다시 실행한다.
-            withContext(NonCancellable) { runCatching { ContractRepository.setStatus(id, "pending", "잠시 멈췄다가 다시 분석합니다.") } }
+            if (!upgrade) {
+                withContext(NonCancellable) { runCatching { ContractRepository.setStatus(id, "pending", "잠시 멈췄다가 다시 분석합니다.") } }
+            }
             throw e
         } catch (e: Throwable) {
             // 메모리 부족 같은 Error 까지 모두 잡는다. 여기서 작업이 실패로 끝나면
             // 대기열 뒤의 계약서들이 전부 멈추기 때문에, 오류는 계약서에 적고 항상 다음으로 넘어간다.
-            val retryable = e is QuotaExceededException || e is ServerException || e is RequestTimeoutException ||
-                e is java.io.IOException
+            if (upgrade) return Result.success() // 업그레이드 실패는 조용히 넘어간다 (기본 분석 결과 유지)
+            val retryable = e is java.io.IOException || e is com.google.firebase.firestore.FirebaseFirestoreException
             if (retryable && runAttemptCount < MAX_ATTEMPTS) {
                 val reason = "다시 시도 예정 (${runAttemptCount + 1}/$MAX_ATTEMPTS): ${GeminiAnalyzer.friendlyMessage(e)}"
                 runCatching { ContractRepository.setStatus(id, "pending", reason) }
@@ -80,6 +97,7 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     companion object {
         private const val KEY_ID = "contractId"
+        private const val KEY_UPGRADE = "upgrade"
         private const val MAX_ATTEMPTS = 6
         private const val QUEUE = "analyze-queue"
         private const val AI_TIMEOUT_MS = 5 * 60_000L
@@ -89,9 +107,9 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
          * 100개를 한꺼번에 올려도 무료 AI 사용량 제한(분당 요청 수)에 덜 걸리고,
          * 같은 부동산 폴더가 중복으로 만들어지지 않는다.
          */
-        fun enqueue(context: Context, contractId: String) {
+        fun enqueue(context: Context, contractId: String, upgrade: Boolean = false) {
             val request = OneTimeWorkRequestBuilder<AnalyzeWorker>()
-                .setInputData(workDataOf(KEY_ID to contractId))
+                .setInputData(workDataOf(KEY_ID to contractId, KEY_UPGRADE to upgrade))
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 60, TimeUnit.SECONDS)
                 .build()

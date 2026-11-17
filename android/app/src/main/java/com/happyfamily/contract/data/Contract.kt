@@ -60,7 +60,11 @@ data class ContractAnalysis(
     val folderName: String = "",
     /** 계약 핵심 내용 텍스트. 화면에 보이지 않고, 정리 작업에 쓴다. */
     val keyFacts: String = "",
+    /** "ai" 또는 "local"(AI 를 못 써서 휴대폰 안 글자 인식으로 만든 기본 결과) */
+    val analysisSource: String = "ai",
 ) {
+    val isLocal: Boolean get() = analysisSource == "local"
+
     /** 소유권이 오가는 계약 (매매·분양·경매) */
     val isSale: Boolean get() = contractType == "매매" || contractType == "분양" || contractType == "경매"
     val isLease: Boolean get() = contractType == "전세" || contractType == "월세"
@@ -171,6 +175,7 @@ data class Contract(
             acquisitionAmount = m.long("acquisitionAmount"),
             folderName = m.str("folderName"),
             keyFacts = m.str("keyFacts"),
+            analysisSource = m.str("analysisSource").ifBlank { "ai" },
         )
     }
 }

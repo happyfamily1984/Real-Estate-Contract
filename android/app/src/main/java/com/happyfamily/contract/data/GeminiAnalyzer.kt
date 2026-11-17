@@ -1,42 +1,20 @@
 package com.happyfamily.contract.data
 
 import android.content.Context
-import com.google.firebase.Firebase
-import com.google.firebase.ai.ai
-import com.google.firebase.ai.type.Content
-import com.google.firebase.ai.type.FirebaseAIException
-import com.google.firebase.ai.type.GenerativeBackend
-import com.google.firebase.ai.type.PromptBlockedException
-import com.google.firebase.ai.type.InvalidAPIKeyException
-import com.google.firebase.ai.type.QuotaExceededException
-import com.google.firebase.ai.type.RequestTimeoutException
-import com.google.firebase.ai.type.ServiceDisabledException
-import com.google.firebase.ai.type.UnsupportedUserLocationException
-import com.google.firebase.ai.type.RequestOptions
-import com.google.firebase.ai.type.Schema
-import com.google.firebase.ai.type.ServerException
-import com.google.firebase.ai.type.content
-import com.google.firebase.ai.type.generationConfig
-import org.json.JSONArray
-import org.json.JSONObject
+import com.happyfamily.contract.data.ai.AiFailure
+import com.happyfamily.contract.data.ai.AiGateway
+import com.happyfamily.contract.data.ai.AiPart
+import com.happyfamily.contract.data.ai.AiSchema
+import com.happyfamily.contract.data.ai.AllAiUnavailableException
 
 /**
- * Firebase AI Logic(Gemini Developer API, 무료 등급)로 계약서를 분석하고 정리한다.
- * API 키는 앱에 들어 있지 않고 Firebase 프로젝트에 연결되어 있다.
+ * Gemini 로 계약서를 분석하고 정리한다. 실제 호출은 [AiGateway] 가 여러 경로(Firebase 모델들 → 내 API 키들)를
+ * 차례로 시도하고, 모두 안 되면 [AllAiUnavailableException] 을 던진다 (그때는 기기 안 분석으로 대신).
  *
  * - [analyze]: 계약서 사진 → 구조화된 내용 (계약서를 올릴 때 한 번만)
  * - [summarize]: 저장해 둔 핵심 텍스트 → 이해관계자 기준 정리 (사진 없이 텍스트만, 빠름)
  */
 object GeminiAnalyzer {
-
-    /**
-     * 위에서부터 차례로 시도한다. 구글이 모델을 은퇴시켜도 다음 이름으로 넘어가도록
-     * 항상 최신 Flash 를 가리키는 별칭을 먼저 둔다. 성공한 이름은 기억해 둔다.
-     */
-    private val MODEL_CANDIDATES = listOf("gemini-flash-latest", "gemini-2.5-flash")
-
-    private const val PREFS = "gemini"
-    private const val KEY_MODEL = "working_model"
 
     private val CONTRACT_TYPES = listOf("매매", "전세", "월세", "분양", "경매", "기타")
 
@@ -93,130 +71,90 @@ object GeminiAnalyzer {
         - 폴더 목록에 있는 모든 폴더에 대해 결과를 돌려줍니다. entries 는 날짜가 빠른 순서로.
     """.trimIndent()
 
-    private val payment = Schema.obj(
+    private val payment = AiSchema.Obj(
         mapOf(
-            "amount" to Schema.long("금액(원 단위 정수)"),
-            "date" to Schema.string("지급일 YYYY-MM-DD"),
+            "amount" to AiSchema.Long("금액(원 단위 정수)"),
+            "date" to AiSchema.Str("지급일 YYYY-MM-DD"),
         ),
     )
 
-    private val party = Schema.obj(
+    private val party = AiSchema.Obj(
         mapOf(
-            "name" to Schema.string("성명 또는 법인명"),
-            "phone" to Schema.string("전화번호"),
-            "address" to Schema.string("주소"),
+            "name" to AiSchema.Str("성명 또는 법인명"),
+            "phone" to AiSchema.Str("전화번호"),
+            "address" to AiSchema.Str("주소"),
         ),
     )
 
-    private val contractSchema = Schema.obj(
+    private val contractSchema = AiSchema.Obj(
         mapOf(
-            "contractType" to Schema.enumeration(CONTRACT_TYPES, "서류 종류"),
-            "propertyType" to Schema.string("부동산 종류 (아파트, 오피스텔, 다세대, 단독주택, 상가, 토지 등)"),
-            "propertyAddress" to Schema.string("부동산 소재지 전체 주소"),
-            "area" to Schema.string("면적 (예: 전용 84.97㎡)"),
-            "contractDate" to Schema.string("계약 체결일 YYYY-MM-DD"),
-            "leaseStart" to Schema.string("임대차 시작일 YYYY-MM-DD (매매면 인도일)"),
-            "leaseEnd" to Schema.string("임대차 종료일 YYYY-MM-DD"),
-            "salePrice" to Schema.long("매매대금·분양금액·매각대금(원). 임대차면 0"),
-            "deposit" to Schema.long("보증금(원). 매매면 0"),
-            "monthlyRent" to Schema.long("월 차임(원). 없으면 0"),
-            "managementFee" to Schema.long("월 관리비(원). 없으면 0"),
+            "contractType" to AiSchema.Enum(CONTRACT_TYPES, "서류 종류"),
+            "propertyType" to AiSchema.Str("부동산 종류 (아파트, 오피스텔, 다세대, 단독주택, 상가, 토지 등)"),
+            "propertyAddress" to AiSchema.Str("부동산 소재지 전체 주소"),
+            "area" to AiSchema.Str("면적 (예: 전용 84.97㎡)"),
+            "contractDate" to AiSchema.Str("계약 체결일 YYYY-MM-DD"),
+            "leaseStart" to AiSchema.Str("임대차 시작일 YYYY-MM-DD (매매면 인도일)"),
+            "leaseEnd" to AiSchema.Str("임대차 종료일 YYYY-MM-DD"),
+            "salePrice" to AiSchema.Long("매매대금·분양금액·매각대금(원). 임대차면 0"),
+            "deposit" to AiSchema.Long("보증금(원). 매매면 0"),
+            "monthlyRent" to AiSchema.Long("월 차임(원). 없으면 0"),
+            "managementFee" to AiSchema.Long("월 관리비(원). 없으면 0"),
             "downPayment" to payment,
-            "middlePayments" to Schema.array(payment, "중도금 목록"),
+            "middlePayments" to AiSchema.Arr(payment, "중도금 목록"),
             "balancePayment" to payment,
             "lessor" to party,
             "lessee" to party,
-            "agent" to Schema.obj(
+            "agent" to AiSchema.Obj(
                 mapOf(
-                    "officeName" to Schema.string("중개사무소 명칭"),
-                    "representative" to Schema.string("대표 공인중개사 성명"),
-                    "registrationNumber" to Schema.string("등록번호"),
-                    "phone" to Schema.string("전화번호"),
-                    "address" to Schema.string("주소"),
+                    "officeName" to AiSchema.Str("중개사무소 명칭"),
+                    "representative" to AiSchema.Str("대표 공인중개사 성명"),
+                    "registrationNumber" to AiSchema.Str("등록번호"),
+                    "phone" to AiSchema.Str("전화번호"),
+                    "address" to AiSchema.Str("주소"),
                 ),
             ),
-            "specialTerms" to Schema.array(Schema.string(), "특약사항 각 항목 (원문에 가깝게)"),
-            "summary" to Schema.string("계약 핵심 내용을 3~5문장으로 요약"),
-            "cautions" to Schema.array(Schema.string(), "계약자가 확인하거나 주의해야 할 점"),
-            "acquisitionDate" to Schema.string("취득일 YYYY-MM-DD. 없으면 \"\""),
-            "acquisitionDateEstimated" to Schema.boolean("취득일이 확실하지 않아 추정한 값이면 true"),
-            "acquisitionAmount" to Schema.long("취득금액(원). 경매는 잔금 납부금액, 분양은 분양금액. 임대차면 0"),
-            "folderName" to Schema.string("이 부동산의 짧은 이름 (예: 과천 미소가)"),
-            "keyFacts" to Schema.string("정리용 핵심 내용 5~10줄"),
-            "matchFolderId" to Schema.string("같은 부동산의 기존 폴더 id. 없으면 \"\""),
+            "specialTerms" to AiSchema.Arr(AiSchema.Str(), "특약사항 각 항목 (원문에 가깝게)"),
+            "summary" to AiSchema.Str("계약 핵심 내용을 3~5문장으로 요약"),
+            "cautions" to AiSchema.Arr(AiSchema.Str(), "계약자가 확인하거나 주의해야 할 점"),
+            "acquisitionDate" to AiSchema.Str("취득일 YYYY-MM-DD. 없으면 \"\""),
+            "acquisitionDateEstimated" to AiSchema.Bool("취득일이 확실하지 않아 추정한 값이면 true"),
+            "acquisitionAmount" to AiSchema.Long("취득금액(원). 경매는 잔금 납부금액, 분양은 분양금액. 임대차면 0"),
+            "folderName" to AiSchema.Str("이 부동산의 짧은 이름 (예: 과천 미소가)"),
+            "keyFacts" to AiSchema.Str("정리용 핵심 내용 5~10줄"),
+            "matchFolderId" to AiSchema.Str("같은 부동산의 기존 폴더 id. 없으면 \"\""),
         ),
     )
 
-    private val entrySchema = Schema.obj(
+    private val entrySchema = AiSchema.Obj(
         mapOf(
-            "contractId" to Schema.string("이 줄의 근거가 된 계약서 id"),
-            "date" to Schema.string("YYYY-MM-DD"),
-            "dateEstimated" to Schema.boolean("날짜가 추정이면 true"),
-            "kind" to Schema.enumeration(CONTRACT_TYPES, "계약 종류"),
-            "role" to Schema.enumeration(listOf("매수", "매도", "임차", "임대", "기타"), "이해관계자의 역할"),
-            "amount" to Schema.long("금액(원)"),
-            "monthlyRent" to Schema.long("월세(원). 없으면 0"),
-            "periodStart" to Schema.string("임대차 시작일 또는 \"\""),
-            "periodEnd" to Schema.string("임대차 종료일 또는 \"\""),
-            "ongoing" to Schema.boolean("오늘 기준 진행중이면 true"),
-            "note" to Schema.string("짧은 보충. 없으면 \"\""),
+            "contractId" to AiSchema.Str("이 줄의 근거가 된 계약서 id"),
+            "date" to AiSchema.Str("YYYY-MM-DD"),
+            "dateEstimated" to AiSchema.Bool("날짜가 추정이면 true"),
+            "kind" to AiSchema.Enum(CONTRACT_TYPES, "계약 종류"),
+            "role" to AiSchema.Enum(listOf("매수", "매도", "임차", "임대", "기타"), "이해관계자의 역할"),
+            "amount" to AiSchema.Long("금액(원)"),
+            "monthlyRent" to AiSchema.Long("월세(원). 없으면 0"),
+            "periodStart" to AiSchema.Str("임대차 시작일 또는 \"\""),
+            "periodEnd" to AiSchema.Str("임대차 종료일 또는 \"\""),
+            "ongoing" to AiSchema.Bool("오늘 기준 진행중이면 true"),
+            "note" to AiSchema.Str("짧은 보충. 없으면 \"\""),
         ),
     )
 
-    private val summarySchema = Schema.obj(
+    private val summarySchema = AiSchema.Obj(
         mapOf(
-            "inferredStakeholder" to Schema.string("기준으로 삼은 이해관계자 이름"),
-            "folders" to Schema.array(
-                Schema.obj(
+            "inferredStakeholder" to AiSchema.Str("기준으로 삼은 이해관계자 이름"),
+            "folders" to AiSchema.Arr(
+                AiSchema.Obj(
                     mapOf(
-                        "folderId" to Schema.string("폴더 id"),
-                        "status" to Schema.enumeration(listOf("진행중", "완료"), "이해관계자 기준 상태"),
-                        "entries" to Schema.array(entrySchema, "계약별 정리, 날짜 빠른 순"),
+                        "folderId" to AiSchema.Str("폴더 id"),
+                        "status" to AiSchema.Enum(listOf("진행중", "완료"), "이해관계자 기준 상태"),
+                        "entries" to AiSchema.Arr(entrySchema, "계약별 정리, 날짜 빠른 순"),
                     ),
                 ),
             ),
         ),
     )
-
-    private fun model(name: String, schema: Schema, system: String) =
-        Firebase.ai(backend = GenerativeBackend.googleAI())
-            .generativeModel(
-                modelName = name,
-                generationConfig = generationConfig {
-                    responseMimeType = "application/json"
-                    responseSchema = schema
-                    temperature = 0f
-                },
-                systemInstruction = content { text(system) },
-                // 페이지가 많으면 응답이 오래 걸릴 수 있다.
-                requestOptions = RequestOptions(timeoutInMillis = 4 * 60_000L),
-            )
-
-    /** 후보 모델을 차례로 써서 JSON 응답을 받는다. */
-    private suspend fun generate(
-        context: Context,
-        schema: Schema,
-        system: String,
-        request: Content,
-    ): Map<String, Any?> {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val remembered = prefs.getString(KEY_MODEL, null)
-        val candidates = listOfNotNull(remembered) + MODEL_CANDIDATES.filter { it != remembered }
-
-        var lastError: Exception? = null
-        for (name in candidates) {
-            try {
-                val text = model(name, schema, system).generateContent(request).text
-                    ?: throw IllegalStateException("AI가 빈 응답을 보냈습니다. 다시 시도해 주세요.")
-                prefs.edit().putString(KEY_MODEL, name).apply()
-                return JSONObject(text).toMap()
-            } catch (e: ServerException) {
-                // 모델 이름이 없어졌거나 서버 오류 → 다음 후보로
-                lastError = e
-            }
-        }
-        throw lastError ?: IllegalStateException("사용할 수 있는 Gemini 모델이 없습니다.")
-    }
 
     /**
      * 계약서 페이지 사진(JPEG)들을 분석해 Firestore 에 그대로 저장할 수 있는 Map 으로 돌려준다.
@@ -229,17 +167,17 @@ object GeminiAnalyzer {
             folders.take(200).joinToString("\n") { "- id=${it.id} / 이름=${it.name} / 주소=${it.address}" }
         }
         val prepared = AiImages.prepare(pages)
-        val request = content {
+        val parts = buildList {
             prepared.pages.forEachIndexed { i, jpeg ->
-                text("[${i + 1} / ${pages.size} 페이지]")
-                inlineData(jpeg, "image/jpeg")
+                add(AiPart.Text("[${i + 1} / ${pages.size} 페이지]"))
+                add(AiPart.Jpeg(jpeg))
             }
             if (prepared.skipped > 0) {
-                text("(서류가 길어 전체 ${pages.size}페이지 중 앞 ${prepared.pages.size}페이지만 보냅니다. cautions 에 이 사실을 적어 주세요.)")
+                add(AiPart.Text("(서류가 길어 전체 ${pages.size}페이지 중 앞 ${prepared.pages.size}페이지만 보냅니다. cautions 에 이 사실을 적어 주세요.)"))
             }
-            text("기존 폴더:\n$folderList\n\n위 서류 사진의 내용을 스키마에 맞춰 정리해 주세요.")
+            add(AiPart.Text("기존 폴더:\n$folderList\n\n위 서류 사진의 내용을 스키마에 맞춰 정리해 주세요."))
         }
-        return generate(context, contractSchema, EXTRACT_PROMPT, request)
+        return AiGateway.generateJson(context, contractSchema, EXTRACT_PROMPT, parts) + ("analysisSource" to "ai")
     }
 
     data class SummarizeInput(val folder: Folder, val digests: List<String>)
@@ -256,7 +194,7 @@ object GeminiAnalyzer {
                 input.digests.forEach { appendLine(it) }
             }
         }
-        val json = generate(context, summarySchema, SUMMARIZE_PROMPT, content { text(body) })
+        val json = AiGateway.generateJson(context, summarySchema, SUMMARIZE_PROMPT, listOf(AiPart.Text(body)))
         val folders = json.mapList("folders").map { f ->
             FolderSummary(
                 folderId = f.str("folderId"),
@@ -269,30 +207,8 @@ object GeminiAnalyzer {
     }
 
     fun friendlyMessage(e: Throwable): String = when (e) {
-        is ServiceDisabledException ->
-            "Firebase 콘솔 → AI Logic 에서 Gemini Developer API 를 켜 주세요. (켠 뒤 몇 분 지나면 됩니다)"
-        is InvalidAPIKeyException ->
-            "AI 키 설정이 올바르지 않습니다. Firebase 콘솔 → AI Logic 설정을 확인하고 google-services.json 을 다시 받아 주세요."
-        is UnsupportedUserLocationException -> "현재 위치(국가)에서는 Gemini 무료 API 를 쓸 수 없습니다."
-        is RequestTimeoutException -> "AI 응답이 너무 오래 걸렸습니다. 잠시 뒤 다시 시도합니다."
-        is QuotaExceededException -> "무료 AI 사용량을 다 썼습니다. 잠시 뒤(하루 한도면 내일) 다시 분석을 눌러 주세요."
-        is PromptBlockedException -> "AI가 이 서류의 분석을 거절했습니다. 부동산 서류가 맞는지 확인해 주세요."
-        is ServerException -> "AI 서버 오류입니다. 잠시 후 다시 시도해 주세요. (${e.message})"
-        is FirebaseAIException -> "AI 분석 중 오류가 발생했습니다. (${e.message})"
-        is org.json.JSONException -> "AI 분석 결과를 읽지 못했습니다. 다시 시도해 주세요."
-        else -> e.message ?: e.toString()
-    }
-
-    private fun JSONObject.toMap(): Map<String, Any?> =
-        keys().asSequence().associateWith { key -> convert(get(key)) }
-
-    private fun JSONArray.toList(): List<Any?> = (0 until length()).map { convert(get(it)) }
-
-    private fun convert(value: Any?): Any? = when (value) {
-        is JSONObject -> value.toMap()
-        is JSONArray -> value.toList()
-        is Int -> value.toLong()
-        JSONObject.NULL -> null
-        else -> value
+        is AllAiUnavailableException -> "지금은 쓸 수 있는 AI 가 없습니다 (무료 한도 소진 등)."
+        is AiFailure -> e.message ?: "AI 오류"
+        else -> AiGateway.classify(e).message ?: e.toString()
     }
 }

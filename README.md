@@ -45,6 +45,17 @@
 > ⚠️ **개인정보 주의**: Gemini **무료** 등급에서는 보낸 내용(계약서 사진)을 Google 이 서비스 개선에 쓸 수 있고, 사람이 검토할 수도 있습니다.
 > 계약서에는 이름·전화번호·주소가 들어 있으니 이 점을 알고 쓰세요. 원하지 않으면 Firebase 프로젝트를 Blaze 로 올리고 유료 등급을 쓰면 됩니다(코드 변경 없음, 사용한 만큼 과금).
 
+## AI 를 못 쓸 때의 대안 (어떤 상황에서도 동작)
+
+분석은 아래 순서로 시도하고, 앞 단계가 안 되면 자동으로 다음 단계로 넘어갑니다. 설정은 홈 화면 오른쪽 위 ⚙️ **AI 설정**에서 확인할 수 있습니다.
+
+1. **Firebase Gemini (무료)** — `gemini-2.5-flash` → `gemini-2.5-flash-lite`. 모델마다 무료 한도가 따로입니다. 서버가 붐비면(503) 잠시 뒤 같은 모델로 자동 재시도합니다.
+2. **내 Gemini API 키 (선택)** — [Google AI Studio](https://aistudio.google.com/apikey)에서 무료로 만든 키를 앱에 넣으면 씁니다. 키마다 한도가 따로라 여러 개 넣을 수 있습니다. 키는 휴대폰 안에만 저장됩니다.
+3. **휴대폰 안 글자 인식 (항상 동작)** — 구글 ML Kit 한국어 글자 인식으로 사진의 글자를 읽고 금액·날짜·주소·당사자를 규칙으로 뽑습니다. 인터넷·한도 없이 되지만 정확도가 낮아 "기본 분석"으로 표시됩니다.
+4. **자동 다시 분석** — 3번 결과는 AI 를 다시 쓸 수 있게 되면(3시간마다, 앱을 열 때 확인) 자동으로 AI 로 다시 분석합니다.
+
+한도에 걸린 모델은 잠시 건너뜁니다 (분당 한도는 2분, 하루 한도는 구글 무료 한도 초기화 시각까지). 계약내용정리도 AI 를 못 쓰면 기본 규칙으로 정리합니다.
+
 ## 보안: 공개 저장소에서도 안전한 이유
 
 | 비밀 정보 | 저장소에 들어 있나? | 어디에 두나 |
@@ -137,7 +148,7 @@ GitHub 저장소 → **Settings → Secrets and variables → Actions → New re
     ./gradlew assembleRelease
     ```
     `app/signing.keystore` 는 `.gitignore` 에 들어 있어 커밋되지 않습니다.
-- Gemini 모델: `GeminiAnalyzer.kt` 의 `MODEL_CANDIDATES`. 최신 Flash 를 가리키는 별칭(`gemini-flash-latest`)을 먼저 시도하고, 실패하면 다음 이름으로 넘어갑니다.
+- Gemini 모델·대체 순서: `data/ai/AiGateway.kt` 의 `MODELS`. 기기 안 분석: `LocalAnalyzer.kt`, `KoreanContractParser.kt`.
 - 데이터 구조 (Firestore)
   - `users/{uid}/contracts/{contractId}`: `status`(pending → processing → done / error), `pageCount`, `thumbnail`, `analysis`, `memo`, `title`, `contractType`, `folderId`, `sortDate`, `digest`(숨김 핵심 텍스트), `createdAt`
   - `users/{uid}/folders/{folderId}`: `name`, `address`, `stakeholder`, `status`(ongoing / done), `summaryText`, `summaryEntries`, `summaryEdited`

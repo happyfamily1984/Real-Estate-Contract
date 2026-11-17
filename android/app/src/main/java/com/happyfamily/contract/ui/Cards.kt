@@ -290,6 +290,10 @@ fun ContractCard(contract: Contract, onClick: () -> Unit, ongoing: Boolean = fal
                         Spacer(Modifier.width(8.dp))
                         Badge(SummaryText.ONGOING_MARK, Brand.Blue)
                     }
+                    if (a?.isLocal == true) {
+                        Spacer(Modifier.width(8.dp))
+                        Badge("기본 분석", Brand.TextSub)
+                    }
                 }
                 Spacer(Modifier.height(2.dp))
                 Text(

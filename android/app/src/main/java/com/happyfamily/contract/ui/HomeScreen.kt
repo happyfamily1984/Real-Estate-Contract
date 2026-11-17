@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -69,6 +70,7 @@ fun HomeScreen(
     onOpenFolder: (String) -> Unit,
     onOpenContract: (String) -> Unit,
     onOpenStakeholders: () -> Unit,
+    onOpenAiSettings: () -> Unit = {},
     viewModel: HomeViewModel = viewModel(),
     importVm: ImportViewModel = viewModel(),
 ) {
@@ -104,6 +106,7 @@ fun HomeScreen(
         onPickFiles = importer.pickFiles,
         onScan = importer.scan,
         onStakeholders = onOpenStakeholders,
+        onAiSettings = onOpenAiSettings,
         onSignOut = { confirmSignOut = true },
         onOpenFolder = onOpenFolder,
         onOpenContract = onOpenContract,
@@ -143,6 +146,7 @@ internal fun HomeContent(
     onPickFiles: () -> Unit,
     onScan: () -> Unit,
     onStakeholders: () -> Unit,
+    onAiSettings: () -> Unit = {},
     onSignOut: () -> Unit,
     onOpenFolder: (String) -> Unit,
     onOpenContract: (String) -> Unit,
@@ -177,6 +181,7 @@ internal fun HomeContent(
                         modifier = Modifier.weight(1f),
                     )
                     HeaderIcon(Icons.Outlined.Groups, "이해관계자", onClick = onStakeholders)
+                    HeaderIcon(Icons.Outlined.Settings, "AI 설정", onClick = onAiSettings)
                     HeaderIcon(Icons.AutoMirrored.Outlined.Logout, "로그아웃", onClick = onSignOut)
                 }
             }

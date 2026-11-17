@@ -98,6 +98,7 @@ dependencies {
     implementation(libs.googleid)
 
     implementation(libs.mlkit.document.scanner)
+    implementation(libs.mlkit.text.recognition.korean)
 
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)

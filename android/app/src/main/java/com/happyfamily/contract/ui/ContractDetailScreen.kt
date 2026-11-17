@@ -184,7 +184,25 @@ fun ContractDetailScreen(
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("다시 분석") }
                 }
-                ContractStatus.DONE -> contract.analysis?.let { AnalysisSections(it) }
+                ContractStatus.DONE -> contract.analysis?.let { a ->
+                    if (a.isLocal) {
+                        StatusCard(
+                            "AI 를 쓸 수 없어서 휴대폰이 글자를 읽어 만든 기본 결과입니다. 금액·날짜·이름을 원본과 꼭 대조하세요.\n" +
+                                "AI 를 다시 쓸 수 있게 되면 자동으로 다시 분석합니다.",
+                            loading = false,
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    runCatching { ContractRepository.reanalyze(context, contract.id) }
+                                        .onFailure { actionError = "재분석 요청 실패: ${it.message}" }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("지금 AI 로 다시 분석") }
+                    }
+                    AnalysisSections(a)
+                }
             }
 
             MemoSection(contract)

@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.happyfamily.contract.data.AnalyzeWorker
+import com.happyfamily.contract.data.UpgradeWorker
 import com.happyfamily.contract.data.Contract
 import com.happyfamily.contract.data.ContractRepository
 import com.happyfamily.contract.data.Folder
@@ -74,6 +75,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { runCatching { FolderRepository.fileUnfiledContracts(getApplication()) } }
         // 앱이 꺼지거나 예전 버전에서 멈춘 분석을 다시 대기열에 넣는다.
         viewModelScope.launch { runCatching { AnalyzeWorker.recoverStuck(getApplication()) } }
+        // AI 를 못 써서 기본 분석으로 끝난 계약서를 AI 를 쓸 수 있게 되면 다시 분석한다.
+        UpgradeWorker.schedule(getApplication())
+        viewModelScope.launch { runCatching { UpgradeWorker.upgradeNow(getApplication()) } }
     }
 }
 

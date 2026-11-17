@@ -32,8 +32,10 @@ fun AppNavigation() {
                     onOpenFolder = { id -> nav.navigate("folder/$id") },
                     onOpenContract = { id -> nav.navigate("detail/$id") },
                     onOpenStakeholders = { nav.navigate("stakeholders") },
+                    onOpenAiSettings = { nav.navigate("ai-settings") },
                 )
             }
+            composable("ai-settings") { AiSettingsScreen(onBack = { nav.popBackStack() }) }
             composable("folder/{id}", arguments = idArg) { entry ->
                 FolderScreen(
                     folderId = entry.arguments?.getString("id").orEmpty(),
