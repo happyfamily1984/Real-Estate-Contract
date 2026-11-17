@@ -2,6 +2,7 @@ package com.happyfamily.contract.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.graphics.pdf.PdfRenderer
@@ -283,6 +284,63 @@ object ContractRepository {
         ordered.drop(1).forEach { delete(it) }
         AnalyzeWorker.enqueue(context, target.id)
         return target.id
+    }
+
+    private fun thumbnailOfJpeg(jpeg: ByteArray): ByteArray? =
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.let { b -> thumbnailOf(b).also { b.recycle() } }
+
+    /**
+     * 계약서의 일부 페이지를 떼어 [folderId] 폴더의 새 계약서로 옮긴다 (여러 서류가 한 계약서로 묶여 올라간 경우).
+     * 옮긴 페이지는 원래 계약서에서 사라지고, 새 계약서와 남은 계약서 모두 다시 분석한다. 새 계약서 id 를 돌려준다.
+     * 모든 페이지를 옮기는 경우는 호출하는 쪽에서 계약서 전체 옮기기로 처리한다.
+     */
+    suspend fun movePages(context: Context, contract: Contract, indices: List<Int>, folderId: String): String {
+        val moving = indices.distinct().sorted().filter { it in 0 until contract.pageCount }
+        require(moving.isNotEmpty()) { "옮길 페이지를 골라 주세요." }
+        require(moving.size < contract.pageCount) { "모든 페이지를 옮길 때는 '전체 옮기기'를 쓰세요." }
+        val uid = uid()
+        val all = (0 until contract.pageCount).map { pageImage(contract.id, it) }
+        val moved = moving.map { all[it] }
+        val remaining = all.filterIndexed { i, _ -> i !in moving }
+
+        // 1) 새 계약서 만들기
+        val doc = contracts(uid).document()
+        moved.forEachIndexed { i, bytes ->
+            pages(uid, doc.id).document("$i").set(mapOf("index" to i, "image" to Blob.fromBytes(bytes))).await()
+        }
+        doc.set(
+            mapOf(
+                "status" to "pending",
+                "pageCount" to moved.size,
+                "thumbnail" to thumbnailOfJpeg(moved.first())?.let(Blob::fromBytes),
+                "memo" to "",
+                "title" to "분석 중인 계약서",
+                "folderId" to folderId,
+                "confirmed" to true,
+                "createdAt" to FieldValue.serverTimestamp(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+        ).await()
+
+        // 2) 원래 계약서에서 옮긴 페이지 빼기 (남은 페이지를 앞에서부터 다시 번호 매김)
+        remaining.forEachIndexed { i, bytes ->
+            pages(uid, contract.id).document("$i").set(mapOf("index" to i, "image" to Blob.fromBytes(bytes))).await()
+        }
+        for (i in remaining.size until contract.pageCount) pages(uid, contract.id).document("$i").delete().await()
+        contracts(uid).document(contract.id).update(
+            mapOf(
+                "pageCount" to remaining.size,
+                "thumbnail" to thumbnailOfJpeg(remaining.first())?.let(Blob::fromBytes),
+                "status" to "pending",
+                "error" to FieldValue.delete(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+        ).await()
+        pageCache.keys.removeAll { it.startsWith("${contract.id}/") }
+
+        AnalyzeWorker.enqueue(context, doc.id)
+        AnalyzeWorker.enqueue(context, contract.id)
+        return doc.id
     }
 
     suspend fun get(id: String): Contract? =

@@ -237,6 +237,31 @@ object FolderRepository {
         return folderId to folderName
     }
 
+    /**
+     * 계약서의 일부 페이지를 [targetId] 폴더(null 이면 [newFolderName] 새 폴더)로 옮긴다.
+     * 모든 페이지를 고르면 계약서 전체를 옮긴다. 옮겨 간 폴더 이름을 돌려준다.
+     */
+    suspend fun movePages(
+        context: Context,
+        contract: Contract,
+        indices: List<Int>,
+        targetId: String?,
+        newFolderName: String = "",
+    ): String {
+        if (indices.distinct().size >= contract.pageCount) {
+            return moveContracts(context, listOf(contract), targetId, newFolderName).second
+        }
+        val (folderId, name) = if (targetId != null) {
+            targetId to (get(targetId)?.name ?: "")
+        } else {
+            val n = newFolderName.trim().ifBlank { "새 계약 폴더" }
+            // 주소·사진·이해관계자는 옮긴 페이지 분석이 끝나면 채워진다.
+            createFolder(name = n, address = "", stakeholder = "", thumbnail = null) to n
+        }
+        ContractRepository.movePages(context, contract, indices, folderId)
+        return name
+    }
+
     // ---------- 이해관계자 ----------
 
     suspend fun allStakeholders(): List<Stakeholder> =
@@ -372,8 +397,18 @@ object FolderRepository {
      * 아니면 AI 가 고른 같은 부동산 폴더 → 같은 주소 폴더 → 새 폴더 순서로 정한다.
      */
     suspend fun assignFolder(contract: Contract, matchFolderId: String?, folders: List<Folder>): String {
-        contract.folderId?.let { return it }
         val a = contract.analysis
+        contract.folderId?.let { id ->
+            // 이미 폴더가 정해진 계약서: 폴더에 주소·사진이 비어 있으면 채워 준다 (페이지를 옮겨 만든 새 폴더 등).
+            folders.firstOrNull { it.id == id }?.let { f ->
+                val fields = buildMap<String, Any?> {
+                    if (f.thumbnail == null && contract.thumbnail != null) put("thumbnail", Blob.fromBytes(contract.thumbnail))
+                    if (f.address.isBlank() && !a?.propertyAddress.isNullOrBlank()) put("address", a!!.propertyAddress)
+                }
+                if (fields.isNotEmpty()) update(f.id, fields)
+            }
+            return id
+        }
         val byAi = folders.firstOrNull { it.id == matchFolderId }
         val byAddress = a?.propertyAddress?.takeIf { it.isNotBlank() }?.let { addr ->
             folders.firstOrNull { it.address.isNotBlank() && addressKey(it.address) == addressKey(addr) }

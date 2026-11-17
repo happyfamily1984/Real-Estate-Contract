@@ -2,6 +2,10 @@ package com.happyfamily.contract.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -87,6 +91,9 @@ fun ContractDetailScreen(
     val folders by foldersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     var moving by remember { mutableStateOf(false) }
     var moveMessage by remember { mutableStateOf<String?>(null) }
+    /** null 이면 보통 화면, 아니면 옮기려고 고른 페이지 번호들 */
+    var pageSel by remember { mutableStateOf<Set<Int>?>(null) }
+    var movingPages by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var confirmDelete by remember { mutableStateOf(false) }
@@ -147,7 +154,35 @@ fun ContractDetailScreen(
             actionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             moveMessage?.let { Text(it, color = Brand.Blue, fontWeight = FontWeight.SemiBold) }
 
-            PhotoStrip(contract, onOpenPhoto)
+            PhotoStrip(
+                contract, onOpenPhoto,
+                selected = pageSel,
+                onToggle = { i -> pageSel = (pageSel ?: emptySet()).let { if (i in it) it - i else it + i } },
+            )
+            // 페이지(파일) 단위로 옮기기: 하나씩 고르거나 전체
+            val busy = contract.status == ContractStatus.PENDING || contract.status == ContractStatus.PROCESSING
+            val sel = pageSel
+            if (sel == null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { pageSel = emptySet() }, enabled = !busy && contract.pageCount > 1, modifier = Modifier.weight(1f)) {
+                        Text("페이지 골라서 옮기기")
+                    }
+                    OutlinedButton(onClick = { moving = true }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("전체 옮기기") }
+                }
+            } else {
+                Text(
+                    "옮길 페이지를 누르세요. 옮긴 페이지는 위 목록에서 사라지고, 옮겨 간 폴더에 새 계약서로 들어갑니다.",
+                    color = Brand.TextSub,
+                    fontSize = 13.sp,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    TextButton(onClick = { pageSel = null }) { Text("취소") }
+                    OutlinedButton(onClick = { pageSel = (0 until contract.pageCount).toSet() }, modifier = Modifier.weight(1f)) { Text("전체 선택") }
+                    Button(onClick = { movingPages = true }, enabled = sel.isNotEmpty(), modifier = Modifier.weight(1f)) {
+                        Text("고른 ${sel.size}장 옮기기")
+                    }
+                }
+            }
 
             // 새로 올린 계약서(확인 전)는 AI 제안 폴더를 보여 주고 '넣기'로 확정
             val suggestion = if (!contract.confirmed) {
@@ -225,6 +260,26 @@ fun ContractDetailScreen(
 
             MemoSection(contract)
         }
+    }
+
+    if (movingPages && contract != null) {
+        val chosen = pageSel.orEmpty().sorted()
+        FolderPickerDialog(
+            title = "${chosen.size}장을 어느 폴더로 옮길까요?",
+            folders = folders,
+            currentFolderId = null,
+            suggestedNewName = "",
+            onDismiss = { movingPages = false },
+            onPick = { target, newName ->
+                movingPages = false
+                pageSel = null
+                scope.launch {
+                    runCatching { FolderRepository.movePages(context, contract, chosen, target, newName) }
+                        .onSuccess { actionError = null; moveMessage = "${chosen.size}장을 '$it' 폴더로 옮겼어요. 옮긴 페이지와 남은 페이지를 다시 분석합니다." }
+                        .onFailure { actionError = "옮기지 못했습니다: ${friendlyError(it)}" }
+                }
+            },
+        )
     }
 
     if (moving && contract != null) {
@@ -314,19 +369,31 @@ private fun FolderRow(
     }
 }
 
+/** 페이지 목록. [selected] 가 null 이 아니면 고르는 중 (누르면 선택/해제), 길게 누르면 고르기 시작 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun PhotoStrip(contract: Contract, onOpenPhoto: (String, Int) -> Unit) {
+private fun PhotoStrip(
+    contract: Contract,
+    onOpenPhoto: (String, Int) -> Unit,
+    selected: Set<Int>? = null,
+    onToggle: (Int) -> Unit = {},
+) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(contract.pageCount) { index ->
-            val jpeg by produceState<ByteArray?>(null, contract.id, index) {
+            val jpeg by produceState<ByteArray?>(null, contract.id, index, contract.pageCount) {
                 value = runCatching { ContractRepository.pageImage(contract.id, index) }.getOrNull()
             }
+            val isSelected = selected?.contains(index) == true
             Box(
                 Modifier
                     .size(width = 96.dp, height = 128.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .clickable { onOpenPhoto(contract.id, index) },
+                    .then(if (isSelected) Modifier.border(3.dp, Brand.Blue, RoundedCornerShape(8.dp)) else Modifier)
+                    .combinedClickable(
+                        onClick = { if (selected != null) onToggle(index) else onOpenPhoto(contract.id, index) },
+                        onLongClick = { onToggle(index) },
+                    ),
                 contentAlignment = Alignment.BottomEnd,
             ) {
                 jpeg?.let {
@@ -335,6 +402,14 @@ private fun PhotoStrip(contract: Contract, onOpenPhoto: (String, Int) -> Unit) {
                         contentDescription = "${index + 1}페이지",
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
+                    )
+                }
+                if (selected != null) {
+                    Icon(
+                        if (isSelected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                        contentDescription = if (isSelected) "선택됨" else "선택 안 됨",
+                        tint = if (isSelected) Brand.Blue else Color.White,
+                        modifier = Modifier.align(Alignment.TopStart).padding(4.dp).size(24.dp),
                     )
                 }
                 Text(

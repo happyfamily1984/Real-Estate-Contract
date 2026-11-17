@@ -52,6 +52,11 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
     val folders by foldersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     var picking by remember { mutableStateOf(false) }
     var info by remember { mutableStateOf<String?>(null) }
+    /** true: 지금 보는 페이지만, false: 계약서 전체 */
+    var pageOnly by remember { mutableStateOf(true) }
+    val busy = contract?.status.let {
+        it == com.happyfamily.contract.data.ContractStatus.PENDING || it == com.happyfamily.contract.data.ContractStatus.PROCESSING
+    }
 
     // 새로 올린 계약서(폴더 확인 전)를 크게 볼 때: 여기서 바로 폴더에 넣을 수 있다.
     val c = contract
@@ -97,20 +102,18 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
                     )
                     androidx.compose.foundation.layout.Spacer(Modifier.padding(4.dp))
                     androidx.compose.foundation.layout.Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-                        // 옮기기 = 확정: 위에 표시된 폴더(제안 폴더 또는 지금 폴더)에 넣고 목록에서 뺀다.
+                        // 이 페이지만 떼어 옮기기 / 계약서 전체 옮기기 (둘 다 폴더를 고른 뒤 '옮기기'로 확정)
                         androidx.compose.material3.Button(
-                            onClick = {
-                                scope.launch {
-                                    runCatching { com.happyfamily.contract.data.FolderRepository.confirmSuggested(context, listOf(c)) }
-                                        .onSuccess { onBack() }
-                                        .onFailure { info = friendlyError(it) }
-                                }
-                            },
-                            enabled = c.folderId != null || suggestion != null,
+                            onClick = { pageOnly = true; picking = true },
+                            enabled = !busy,
                             modifier = Modifier.weight(1f),
-                        ) { Text("옮기기") }
-                        androidx.compose.material3.OutlinedButton(onClick = { picking = true }, modifier = Modifier.weight(1f)) {
-                            Text("다른 폴더로 옮기기", color = Color.White)
+                        ) { Text(if (pageCount > 1) "이 페이지만 옮기기" else "옮기기") }
+                        if (pageCount > 1) {
+                            androidx.compose.material3.OutlinedButton(
+                                onClick = { pageOnly = false; picking = true },
+                                enabled = !busy,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("전체 ${pageCount}장 옮기기", color = Color.White) }
                         }
                     }
                 }
@@ -121,23 +124,32 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
             state = pagerState,
             modifier = Modifier.fillMaxSize().padding(padding).background(Color.Black),
         ) { page ->
-            ZoomableImage(contractId, page)
+            ZoomableImage(contractId, page, pageCount)
         }
     }
 
     if (picking && c != null) {
+        val page = pagerState.currentPage
+        val single = pageOnly && pageCount > 1
         FolderPickerDialog(
-            title = "어느 폴더로 옮길까요?",
+            title = if (single) "${page + 1}페이지를 어느 폴더로 옮길까요?" else "어느 폴더로 옮길까요?",
             folders = folders,
-            currentFolderId = c.folderId ?: c.suggestedFolderId,
-            suggestedNewName = c.analysis?.folderName.orEmpty(),
+            currentFolderId = if (single) null else c.folderId ?: c.suggestedFolderId,
+            suggestedNewName = if (single) "" else c.analysis?.folderName.orEmpty(),
             onDismiss = { picking = false },
             onPick = { target, newName ->
                 picking = false
                 scope.launch {
-                    runCatching { com.happyfamily.contract.data.FolderRepository.moveContracts(context, listOf(c), target, newName) }
-                        .onSuccess { onBack() }
-                        .onFailure { info = friendlyError(it) }
+                    runCatching {
+                        if (single) {
+                            com.happyfamily.contract.data.FolderRepository.movePages(context, c, listOf(page), target, newName)
+                        } else {
+                            com.happyfamily.contract.data.FolderRepository.moveContracts(context, listOf(c), target, newName).second
+                        }
+                    }.onSuccess { name ->
+                        android.widget.Toast.makeText(context, "'$name' 폴더로 옮겼어요.", android.widget.Toast.LENGTH_SHORT).show()
+                        onBack()
+                    }.onFailure { info = friendlyError(it) }
                 }
             },
         )
@@ -145,8 +157,8 @@ fun PhotoViewerScreen(contractId: String, initialPage: Int, onBack: () -> Unit) 
 }
 
 @Composable
-private fun ZoomableImage(contractId: String, index: Int) {
-    val jpeg by produceState<ByteArray?>(null, contractId, index) {
+private fun ZoomableImage(contractId: String, index: Int, pageCount: Int = 0) {
+    val jpeg by produceState<ByteArray?>(null, contractId, index, pageCount) {
         value = runCatching { ContractRepository.pageImage(contractId, index) }.getOrNull()
     }
     var scale by remember { mutableFloatStateOf(1f) }
