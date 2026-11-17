@@ -35,6 +35,9 @@ import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.ViewAgenda
+import androidx.compose.material.icons.outlined.ArrowDownward
+import androidx.compose.material.icons.outlined.ArrowUpward
+import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.UploadFile
@@ -90,7 +93,9 @@ fun HomeScreen(
     val query by viewModel.query.collectAsStateWithLifecycle()
     val filter by viewModel.stakeholderFilter.collectAsStateWithLifecycle()
     val loadError by viewModel.loadError.collectAsStateWithLifecycle()
-    val compact by viewModel.compact.collectAsStateWithLifecycle()
+    val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
+    val sortMode by viewModel.sortMode.collectAsStateWithLifecycle()
+    val sortDesc by viewModel.sortDesc.collectAsStateWithLifecycle()
     val upload by importVm.upload.collectAsStateWithLifecycle()
     val message by importVm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
@@ -122,8 +127,12 @@ fun HomeScreen(
         onStakeholders = onOpenStakeholders,
         onAiSettings = onOpenAiSettings,
         onSchedule = onOpenSchedule,
-        compact = compact,
-        onToggleCompact = { viewModel.setCompact(!compact) },
+        viewMode = viewMode,
+        onViewMode = viewModel::setViewMode,
+        sortMode = sortMode,
+        sortDesc = sortDesc,
+        onSort = viewModel::setSort,
+        onToggleSortDirection = viewModel::toggleSortDirection,
         onSignOut = { confirmSignOut = true },
         onOpenFolder = onOpenFolder,
         onOpenContract = onOpenContract,
@@ -187,8 +196,12 @@ internal fun HomeContent(
     onStakeholders: () -> Unit,
     onAiSettings: () -> Unit = {},
     onSchedule: () -> Unit = {},
-    compact: Boolean = false,
-    onToggleCompact: () -> Unit = {},
+    viewMode: ViewMode = ViewMode.CARD,
+    onViewMode: (ViewMode) -> Unit = {},
+    sortMode: SortMode = SortMode.NAME,
+    sortDesc: Boolean = false,
+    onSort: (SortMode) -> Unit = {},
+    onToggleSortDirection: () -> Unit = {},
     onSignOut: () -> Unit,
     onOpenFolder: (String) -> Unit,
     onOpenContract: (String) -> Unit,
@@ -297,20 +310,10 @@ internal fun HomeContent(
                     } else {
                         LazyColumn(
                             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 112.dp),
-                            verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(if (viewMode == ViewMode.CARD) 12.dp else 4.dp),
                         ) {
                             item(key = "view-toggle") {
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                    TextButton(onClick = onToggleCompact) {
-                                        Icon(
-                                            if (compact) Icons.Outlined.ViewAgenda else Icons.AutoMirrored.Outlined.ViewList,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(if (compact) "사진과 함께 보기" else "목록으로 보기")
-                                    }
-                                }
+                                SortAndViewBar(sortMode, sortDesc, onSort, onToggleSortDirection, viewMode, onViewMode)
                             }
                             if (state.unfiled.isNotEmpty()) {
                                 sectionHeader("분석 중인 계약서", state.unfiled.size, actionLabel = "분석 다시 시작", onAction = onRestartAnalysis)
@@ -323,11 +326,11 @@ internal fun HomeContent(
                             }
                             val canMerge = selecting == null && state.ongoing.size + state.done.size >= 2
                             folderSection(
-                                "진행중", state.ongoing, state.contractCounts, selecting, folderClick, onStartSelect, compact,
+                                "진행중", state.ongoing, state.contractCounts, selecting, folderClick, onStartSelect, viewMode,
                                 actionLabel = if (canMerge) "폴더 합치기" else null,
                             )
                             folderSection(
-                                "완료", state.done, state.contractCounts, selecting, folderClick, onStartSelect, compact,
+                                "완료", state.done, state.contractCounts, selecting, folderClick, onStartSelect, viewMode,
                                 actionLabel = if (canMerge && state.ongoing.isEmpty()) "폴더 합치기" else null,
                             )
                         }
@@ -426,30 +429,93 @@ private fun LazyListScope.folderSection(
     selecting: Set<String>?,
     onClick: (Folder) -> Unit,
     onStartSelect: (String?) -> Unit,
-    compact: Boolean,
+    viewMode: ViewMode,
     actionLabel: String? = null,
 ) {
     if (folders.isEmpty()) return
     sectionHeader(title, folders.size, actionLabel = actionLabel, onAction = { onStartSelect(null) })
-    items(folders, key = { "f-" + it.id }) { f ->
-        if (compact) {
-            FolderRow(
-                folder = f,
-                contractCount = counts[f.id] ?: 0,
-                onClick = { onClick(f) },
-                onLongClick = { if (selecting == null) onStartSelect(f.id) else onClick(f) },
-                selected = selecting?.contains(f.id),
-            )
-            return@items
+    val longClick: (Folder) -> Unit = { f -> if (selecting == null) onStartSelect(f.id) else onClick(f) }
+    when (viewMode) {
+        ViewMode.LIST -> items(folders, key = { "f-" + it.id }) { f ->
+            FolderRow(f, counts[f.id] ?: 0, { onClick(f) }, { longClick(f) }, selecting?.contains(f.id))
         }
-        FolderCard(
-            folder = f,
-            contractCount = counts[f.id] ?: 0,
-            onClick = { onClick(f) },
+        // 바둑판: 한 줄에 두 개씩
+        ViewMode.GRID -> items(folders.chunked(2), key = { "g-" + it.first().id }) { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 3.dp)) {
+                row.forEach { f ->
+                    Box(Modifier.weight(1f)) {
+                        FolderTile(f, counts[f.id] ?: 0, { onClick(f) }, { longClick(f) }, selecting?.contains(f.id))
+                    }
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+        ViewMode.CARD -> items(folders, key = { "f-" + it.id }) { f ->
             // 길게 누르면 합치기 선택을 시작한다.
-            onLongClick = { if (selecting == null) onStartSelect(f.id) else onClick(f) },
-            selected = selecting?.contains(f.id),
-        )
+            FolderCard(f, counts[f.id] ?: 0, { onClick(f) }, { longClick(f) }, selecting?.contains(f.id))
+        }
+    }
+}
+
+/** 정렬 기준(이름순·취득날짜순·최근계약순)과 방향(↑↓), 보기 방식(사진·목록·바둑판) */
+@Composable
+private fun SortAndViewBar(
+    sortMode: SortMode,
+    sortDesc: Boolean,
+    onSort: (SortMode) -> Unit,
+    onToggleDirection: () -> Unit,
+    viewMode: ViewMode,
+    onViewMode: (ViewMode) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("정렬", color = Brand.TextSub, fontSize = 12.sp)
+        SortMode.entries.forEach { m ->
+            val selected = m == sortMode
+            Text(
+                m.label,
+                color = if (selected) Brand.Blue else Brand.TextSub,
+                fontSize = 13.sp,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (selected) Brand.CardTint else Color.Transparent)
+                    .clickable { onSort(m) }
+                    .padding(horizontal = 9.dp, vertical = 6.dp),
+            )
+        }
+        IconButton(onClick = onToggleDirection, modifier = Modifier.size(34.dp)) {
+            Icon(
+                if (sortDesc) Icons.Outlined.ArrowDownward else Icons.Outlined.ArrowUpward,
+                contentDescription = if (sortDesc) "내림차순 (눌러서 거꾸로)" else "오름차순 (눌러서 거꾸로)",
+                tint = Brand.Blue,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Spacer(Modifier.weight(1f))
+        listOf(
+            ViewMode.CARD to (Icons.Outlined.ViewAgenda to "사진 포함"),
+            ViewMode.LIST to (Icons.AutoMirrored.Outlined.ViewList to "목록"),
+            ViewMode.GRID to (Icons.Outlined.GridView to "바둑판"),
+        ).forEach { (mode, iconLabel) ->
+            val selected = mode == viewMode
+            IconButton(
+                onClick = { onViewMode(mode) },
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (selected) Brand.CardTint else Color.Transparent),
+            ) {
+                Icon(
+                    iconLabel.first,
+                    contentDescription = iconLabel.second + " 보기",
+                    tint = if (selected) Brand.Blue else Brand.TextSub,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
     }
 }
 

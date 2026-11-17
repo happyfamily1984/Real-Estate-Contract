@@ -54,7 +54,7 @@ class FolderViewModel(application: Application, val folderId: String) : AndroidV
             try {
                 block()
             } catch (e: Exception) {
-                _message.value = e.message ?: e.toString()
+                _message.value = friendlyError(e)
             }
         }
     }

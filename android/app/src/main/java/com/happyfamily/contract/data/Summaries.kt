@@ -64,8 +64,9 @@ object SummaryText {
         if (e.note.isNotBlank()) append(" (").append(e.note.trim()).append(")")
     }
 
+    /** 같은 서류가 두 번 올라가 똑같은 줄이 생기면 한 줄만 남긴다. */
     fun lines(entries: List<SummaryEntry>): String =
-        entries.sortedBy { it.date.ifBlank { "9999" } }.joinToString("\n") { line(it) }
+        entries.sortedBy { it.date.ifBlank { "9999" } }.map { line(it) }.distinct().joinToString("\n")
 
     /** 폴더 정리를 파일·클립보드로 내보낼 때의 전체 문서 */
     fun folderDocument(folder: Folder): String = buildString {

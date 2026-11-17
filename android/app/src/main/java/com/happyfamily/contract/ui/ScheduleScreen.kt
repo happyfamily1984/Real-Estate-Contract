@@ -30,6 +30,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.EditNote
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -88,14 +96,47 @@ class ScheduleViewModel(application: Application) : AndroidViewModel(application
         FolderRepository.foldersFlow().catch { emit(emptyList()) },
         ContractRepository.contractsFlow().catch { emit(emptyList()) },
         ScheduleRepository.plansFlow().catch { emit(emptyList()) },
-    ) { folders, contracts, plans ->
+        ScheduleRepository.editsFlow().catch { emit(emptyList()) },
+    ) { folders, contracts, plans, edits ->
         val byKey = plans.associateBy { it.eventKey }
-        ScheduleRepository.events(folders, contracts).map { ScheduleItem(it, byKey[it.key]) }
+        ScheduleRepository.applyEdits(ScheduleRepository.events(folders, contracts), edits)
+            .map { ScheduleItem(it, byKey[it.key]) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    fun save(plan: Plan) = viewModelScope.launch { runCatching { ScheduleRepository.savePlan(plan) } }
+    private val _message = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val message: StateFlow<String?> = _message
 
-    fun delete(plan: Plan) = viewModelScope.launch { runCatching { ScheduleRepository.deletePlan(plan.id) } }
+    private fun run(done: String? = null, block: suspend () -> Unit) = viewModelScope.launch {
+        try {
+            block()
+            done?.let { _message.value = it }
+        } catch (e: Exception) {
+            _message.value = friendlyError(e)
+        }
+    }
+
+    fun consumeMessage() {
+        _message.value = null
+    }
+
+    fun save(plan: Plan) = run { ScheduleRepository.savePlan(plan) }
+
+    fun delete(plan: Plan) = run { ScheduleRepository.deletePlan(plan.id) }
+
+    fun saveEvent(e: ScheduleEvent, type: String, date: String, detail: String, folderName: String) =
+        run("일정을 고쳤어요.") { ScheduleRepository.saveEvent(e, type, date, detail, folderName) }
+
+    fun deleteEvent(e: ScheduleEvent) = run("일정을 지웠어요. '계약서 내용으로 다시 적용'을 누르면 되살아납니다.") {
+        ScheduleRepository.deleteEvent(e)
+    }
+
+    fun addEvent(folderName: String, type: String, date: String, detail: String) =
+        run("일정을 추가했어요.") { ScheduleRepository.addEvent(null, folderName, type, date, detail) }
+
+    fun reset() = run {
+        val n = ScheduleRepository.resetEdits()
+        _message.value = "계약서 내용으로 다시 적용했어요. (고치거나 지운 기록 ${n}건 되돌림)"
+    }
 
     /** 알림 설정을 바꾸면 바로 한 번 확인한다. */
     fun checkNow() = viewModelScope.launch { runCatching { ReminderWorker.check(getApplication()) } }
@@ -108,6 +149,12 @@ fun ScheduleScreen(onBack: () -> Unit, onOpenFolder: (String) -> Unit, vm: Sched
     val context = LocalContext.current
     val items by vm.items.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<ScheduleItem?>(null) }
+    var editingEvent by remember { mutableStateOf<ScheduleEvent?>(null) }
+    var adding by remember { mutableStateOf(false) }
+    var confirmReset by remember { mutableStateOf(false) }
+    val message by vm.message.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.consumeMessage() } }
     var settingsVersion by remember { mutableStateOf(0) }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { vm.checkNow() }
@@ -133,6 +180,7 @@ fun ScheduleScreen(onBack: () -> Unit, onOpenFolder: (String) -> Unit, vm: Sched
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, titleContentColor = Brand.Navy),
             )
         },
+        snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(padding),
@@ -166,17 +214,63 @@ fun ScheduleScreen(onBack: () -> Unit, onOpenFolder: (String) -> Unit, vm: Sched
                     }
                 }
             }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { adding = true }) { Text("+ 일정 추가") }
+                    OutlinedButton(onClick = { confirmReset = true }) { Text("계약서 내용으로 다시 적용") }
+                }
+            }
             val list = items
             when {
                 list == null -> item { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
                 list.isEmpty() -> item { CenterText("진행중인 계약의 다가오는 일정이 없습니다.\n(임대차 만기, 잔금일 등)") }
                 else -> items(list, key = { it.event.key }) { item ->
-                    EventCard(item, onOpenFolder = { item.event.folderId?.let(onOpenFolder) }, onPlan = { editing = item })
+                    EventCard(
+                        item,
+                        onOpenFolder = { item.event.folderId?.let(onOpenFolder) },
+                        onPlan = { editing = item },
+                        onEdit = { editingEvent = item.event },
+                    )
                 }
             }
         }
     }
 
+    editingEvent?.let { e ->
+        EventEditDialog(
+            title = if (e.custom) "일정 고치기" else "일정 고치기 (계약서에서 뽑은 일정)",
+            initialType = e.type,
+            initialDate = e.date,
+            initialDetail = e.detail,
+            initialFolderName = e.folderName,
+            folderEditable = e.custom,
+            onDismiss = { editingEvent = null },
+            onSave = { type, date, detail, folder -> vm.saveEvent(e, type, date, detail, folder); editingEvent = null },
+            onDelete = { vm.deleteEvent(e); editingEvent = null },
+        )
+    }
+    if (adding) {
+        EventEditDialog(
+            title = "일정 추가",
+            initialType = "",
+            initialDate = java.time.LocalDate.now().plusMonths(1).toString(),
+            initialDetail = "",
+            initialFolderName = "",
+            folderEditable = true,
+            onDismiss = { adding = false },
+            onSave = { type, date, detail, folder -> vm.addEvent(folder, type, date, detail); adding = false },
+            onDelete = null,
+        )
+    }
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("계약서 내용으로 다시 적용") },
+            text = { Text("고치거나 지운 일정을 모두 되돌리고, 계약서에서 뽑은 일정으로 다시 보여 줍니다. 직접 추가한 일정과 계획 메모는 그대로 둡니다.") },
+            confirmButton = { TextButton(onClick = { confirmReset = false; vm.reset() }) { Text("다시 적용") } },
+            dismissButton = { TextButton(onClick = { confirmReset = false }) { Text("취소") } },
+        )
+    }
     editing?.let { item ->
         PlanDialog(
             item = item,
@@ -189,7 +283,7 @@ fun ScheduleScreen(onBack: () -> Unit, onOpenFolder: (String) -> Unit, vm: Sched
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EventCard(item: ScheduleItem, onOpenFolder: () -> Unit, onPlan: () -> Unit) {
+private fun EventCard(item: ScheduleItem, onOpenFolder: () -> Unit, onPlan: () -> Unit, onEdit: () -> Unit) {
     val e = item.event
     val days = e.daysLeft
     val urgent = days <= 92
@@ -199,7 +293,7 @@ private fun EventCard(item: ScheduleItem, onOpenFolder: () -> Unit, onPlan: () -
         colors = CardDefaults.cardColors(containerColor = Color.White),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (days == 0L) "D-DAY" else "D-$days",
@@ -212,7 +306,17 @@ private fun EventCard(item: ScheduleItem, onOpenFolder: () -> Unit, onPlan: () -
                         .padding(horizontal = 10.dp, vertical = 3.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("${formatShortDate(e.date)} ${e.type}", color = Brand.Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "${formatShortDate(e.date)} ${e.type}",
+                    color = Brand.Navy,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (e.custom) Badge("직접 추가", Brand.TextSub) else if (e.edited) Badge("수정함", Brand.TextSub)
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Outlined.Edit, contentDescription = "일정 고치기·지우기", tint = Brand.TextSub, modifier = Modifier.size(20.dp))
+                }
             }
             Spacer(Modifier.height(6.dp))
             Text(
@@ -313,4 +417,97 @@ private fun PlanDialog(item: ScheduleItem, onDismiss: () -> Unit, onSave: (Plan)
             }
         },
     )
+}
+
+/** 일정 고치기·추가: 종류, 날짜(달력), 내용, (직접 추가한 일정이면) 이름 */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun EventEditDialog(
+    title: String,
+    initialType: String,
+    initialDate: String,
+    initialDetail: String,
+    initialFolderName: String,
+    folderEditable: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (type: String, date: String, detail: String, folderName: String) -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    var type by remember { mutableStateOf(initialType) }
+    var date by remember { mutableStateOf(initialDate) }
+    var detail by remember { mutableStateOf(initialDetail) }
+    var folderName by remember { mutableStateOf(initialFolderName) }
+    var picking by remember { mutableStateOf(false) }
+    val validDate = runCatching { java.time.LocalDate.parse(date) }.isSuccess
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (folderEditable) {
+                    OutlinedTextField(
+                        value = folderName, onValueChange = { folderName = it.take(30) }, singleLine = true,
+                        label = { Text("이름 (예: 과천 미소가)") }, modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                } else {
+                    Text(initialFolderName, color = Brand.Blue, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                }
+                OutlinedTextField(
+                    value = type, onValueChange = { type = it.take(20) }, singleLine = true,
+                    label = { Text("종류") }, modifier = Modifier.fillMaxWidth(),
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("임대차 만기", "잔금일", "중도금", "재계약 협의", "월세 인상", "기타").forEach { t ->
+                        FilterChip(selected = type == t, onClick = { type = t }, label = { Text(t, fontSize = 12.sp) })
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = date, onValueChange = { date = it.take(10) }, singleLine = true,
+                        label = { Text("날짜 (YYYY-MM-DD)") }, isError = !validDate, modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = { picking = true }) { Text("달력") }
+                }
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = detail, onValueChange = { detail = it }, label = { Text("내용") },
+                    minLines = 2, modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(type.trim(), date.trim(), detail.trim(), folderName.trim()) }, enabled = validDate && type.isNotBlank()) {
+                Text("저장")
+            }
+        },
+        dismissButton = {
+            Row {
+                onDelete?.let { TextButton(onClick = it) { Text("삭제", color = MaterialTheme.colorScheme.error) } }
+                TextButton(onClick = onDismiss) { Text("취소") }
+            }
+        },
+    )
+
+    if (picking) {
+        val initialMillis = runCatching {
+            java.time.LocalDate.parse(date).atStartOfDay(java.time.ZoneOffset.UTC).toInstant().toEpochMilli()
+        }.getOrNull()
+        val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+        DatePickerDialog(
+            onDismissRequest = { picking = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let {
+                        date = java.time.Instant.ofEpochMilli(it).atZone(java.time.ZoneOffset.UTC).toLocalDate().toString()
+                    }
+                    picking = false
+                }) { Text("확인") }
+            },
+            dismissButton = { TextButton(onClick = { picking = false }) { Text("취소") } },
+        ) { DatePicker(state = state) }
+    }
 }

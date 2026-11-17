@@ -39,7 +39,7 @@ class ScreenshotTest {
     fun homeFolders() = shot("home_folders.png") { Home(SampleData.homeState()) }
 
     @Test
-    fun homeCompact() = shot("home_compact.png") { Home(SampleData.homeState(), compact = true) }
+    fun homeCompact() = shot("home_compact.png") { Home(SampleData.homeState(), viewMode = ViewMode.LIST) }
 
     @Test
     fun folderContracts() = shot("folder_contracts.png") {
@@ -50,6 +50,9 @@ class ScreenshotTest {
             }
         }
     }
+
+    @Test
+    fun homeGrid() = shot("home_grid.png") { Home(SampleData.homeState(), viewMode = ViewMode.GRID) }
 
     @Test
     fun homeMerge() = shot("home_merge.png") { Home(SampleData.homeState(), selecting = setOf("f1", "f2")) }
@@ -70,7 +73,7 @@ class ScreenshotTest {
     }
 
     @Composable
-    private fun Home(state: HomeState, selecting: Set<String>? = null, compact: Boolean = false) {
+    private fun Home(state: HomeState, selecting: Set<String>? = null, viewMode: ViewMode = ViewMode.CARD) {
         HomeContent(
             state = state,
             query = "",
@@ -82,7 +85,7 @@ class ScreenshotTest {
             snackbar = remember { SnackbarHostState() },
             onPickFiles = {}, onScan = {}, onStakeholders = {}, onSignOut = {}, onOpenFolder = {}, onOpenContract = {},
             selecting = selecting,
-            compact = compact,
+            viewMode = viewMode,
         )
     }
 }

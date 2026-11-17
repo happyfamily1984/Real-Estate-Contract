@@ -32,19 +32,76 @@ data class HomeState(
     val isEmpty: Boolean,
 )
 
+/** 홈 화면 보기 방식 */
+enum class ViewMode(val value: String) { CARD("card"), LIST("list"), GRID("grid") }
+
+/** 폴더 정렬 기준 */
+enum class SortMode(val value: String, val label: String, val defaultDesc: Boolean) {
+    NAME("name", "이름", false),
+    ACQUIRED("acquired", "취득일", false),
+    RECENT("recent", "최근계약", true),
+}
+
+/** 폴더 정렬에 쓰는 날짜들 */
+object FolderSort {
+    /** 취득날짜: 매매·분양·경매 계약의 취득일(없으면 계약일) 중 가장 빠른 것 */
+    fun acquired(contracts: List<Contract>): String? = contracts.mapNotNull { c ->
+        c.analysis?.takeIf { it.isSale }?.let { a -> a.acquisitionDate.ifBlank { a.contractDate }.ifBlank { null } }
+    }.minOrNull()
+
+    /** 최근계약: 가장 최근 계약일 */
+    fun recent(contracts: List<Contract>): String? = contracts.mapNotNull { c ->
+        c.sortDate.ifBlank { c.analysis?.representativeDate.orEmpty() }.ifBlank { null }
+    }.maxOrNull()
+
+    private val collator = java.text.Collator.getInstance(java.util.Locale.KOREAN)
+
+    /** 정렬. 날짜를 모르는 폴더는 방향과 관계없이 맨 뒤 */
+    fun sort(folders: List<Folder>, contracts: List<Contract>, mode: SortMode, desc: Boolean): List<Folder> {
+        val byFolder = contracts.groupBy { it.folderId }
+        if (mode == SortMode.NAME) {
+            val sorted = folders.sortedWith { a, b -> collator.compare(a.name, b.name) }
+            return if (desc) sorted.reversed() else sorted
+        }
+        val keyed = folders.map { f ->
+            val list = byFolder[f.id].orEmpty()
+            f to (if (mode == SortMode.ACQUIRED) acquired(list) else recent(list))
+        }
+        val known = keyed.filter { it.second != null }.sortedBy { it.second }.let { if (desc) it.reversed() else it }
+        val unknown = keyed.filter { it.second == null }.sortedWith { a, b -> collator.compare(a.first.name, b.first.name) }
+        return (known + unknown).map { it.first }
+    }
+}
+
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val query = MutableStateFlow("")
 
     private val prefs = application.getSharedPreferences("home", android.content.Context.MODE_PRIVATE)
 
-    /** 목록으로 보기 (사진 없이 제목만 촘촘하게) */
-    val compact = MutableStateFlow(prefs.getBoolean("compact", false))
+    /** 보기 방식: 사진 포함 / 목록 / 바둑판 */
+    val viewMode = MutableStateFlow(
+        ViewMode.entries.firstOrNull { it.value == prefs.getString("viewMode", null) }
+            ?: if (prefs.getBoolean("compact", false)) ViewMode.LIST else ViewMode.CARD,
+    )
 
-    fun setCompact(on: Boolean) {
-        compact.value = on
-        prefs.edit().putBoolean("compact", on).apply()
+    fun setViewMode(mode: ViewMode) {
+        viewMode.value = mode
+        prefs.edit().putString("viewMode", mode.value).apply()
     }
+
+    val sortMode = MutableStateFlow(SortMode.entries.firstOrNull { it.value == prefs.getString("sort", null) } ?: SortMode.NAME)
+    val sortDesc = MutableStateFlow(prefs.getBoolean("sortDesc", sortMode.value.defaultDesc))
+
+    /** 기준을 바꾸면 그 기준의 기본 방향으로, 같은 기준을 다시 누르면 방향만 뒤집는다. */
+    fun setSort(mode: SortMode) {
+        val desc = if (mode == sortMode.value) !sortDesc.value else mode.defaultDesc
+        sortMode.value = mode
+        sortDesc.value = desc
+        prefs.edit().putString("sort", mode.value).putBoolean("sortDesc", desc).apply()
+    }
+
+    fun toggleSortDirection() = setSort(sortMode.value)
 
     /** null 이면 전체, 아니면 그 이해관계자의 폴더만 */
     val stakeholderFilter = MutableStateFlow<String?>(null)
@@ -52,7 +109,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _loadError = MutableStateFlow<String?>(null)
     val loadError: StateFlow<String?> = _loadError.asStateFlow()
 
-    private val filters = combine(query, stakeholderFilter) { q, s -> q to s }
+    private data class Filters(val query: String, val who: String?, val sort: SortMode, val desc: Boolean)
+
+    private val filters = combine(query, stakeholderFilter, sortMode, sortDesc) { q, s, m, d -> Filters(q, s, m, d) }
 
     /** null 이면 아직 불러오는 중 */
     val state: StateFlow<HomeState?> = combine(
@@ -60,12 +119,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         ContractRepository.contractsFlow().catch { _loadError.value = friendlyLoadError(it) },
         FolderRepository.stakeholdersFlow().catch { emit(emptyList()) },
         filters,
-    ) { folders, contracts, stakeholders, (q, who) ->
+    ) { folders, contracts, stakeholders, f ->
+        val q = f.query
+        val who = f.who
         val counts = contracts.mapNotNull { it.folderId }.groupingBy { it }.eachCount()
-        val shown = folders
+        val filtered = folders
             .filter { who == null || who in it.stakeholderNames }
-            .filter { f -> f.matches(q) || contracts.any { it.folderId == f.id && it.matches(q) } }
-            .sortedBy { it.name }
+            .filter { fo -> fo.matches(q) || contracts.any { it.folderId == fo.id && it.matches(q) } }
+        val shown = FolderSort.sort(filtered, contracts, f.sort, f.desc)
         HomeState(
             unfiled = contracts.filter { it.folderId == null && it.matches(q) },
             ongoing = shown.filter { it.status == FolderStatus.ONGOING },
@@ -94,7 +155,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     },
                 )
             } catch (e: Exception) {
-                onDone("합치지 못했습니다: ${e.message}")
+                onDone("합치지 못했습니다: ${friendlyError(e)}")
             }
         }
     }

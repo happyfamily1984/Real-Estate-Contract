@@ -68,7 +68,10 @@ class ReminderWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
         /** 알림 보낼 일정 찾기. 이미 더 가까운 시점이 지났으면 먼 시점 알림은 건너뛰고 가까운 것 하나만 보낸다. */
         suspend fun check(context: Context) {
-            val events = ScheduleRepository.events(FolderRepository.allFolders(), ContractRepository.allContracts())
+            val events = ScheduleRepository.applyEdits(
+                ScheduleRepository.events(FolderRepository.allFolders(), ContractRepository.allContracts()),
+                runCatching { ScheduleRepository.allEdits() }.getOrDefault(emptyList()),
+            )
             val today = LocalDate.now()
             for (e in events) {
                 val date = LocalDate.parse(e.date)

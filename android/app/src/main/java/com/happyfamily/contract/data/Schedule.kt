@@ -21,9 +21,15 @@ data class ScheduleEvent(
     /** YYYY-MM-DD */
     val date: String,
     val detail: String,
+    /** 수정·직접 추가한 일정이면 원래(고정) 키. 날짜를 고쳐도 계획 메모·알림이 따라가도록 */
+    val origin: String? = null,
+    /** 사용자가 직접 추가한 일정 */
+    val custom: Boolean = false,
+    /** 사용자가 고친 일정 */
+    val edited: Boolean = false,
 ) {
-    /** 알림·계획을 붙일 때 쓰는 고유 키 */
-    val key: String get() = "$contractId|$type|$date"
+    /** 알림·계획·수정 기록을 붙일 때 쓰는 고유 키 */
+    val key: String get() = origin ?: "$contractId|$type|$date"
 
     val daysLeft: Long get() = ChronoUnit.DAYS.between(LocalDate.now(), LocalDate.parse(date))
 }
@@ -50,6 +56,38 @@ data class Plan(
             tags = (doc.get("tags") as? List<*>)?.filterIsInstance<String>().orEmpty(),
             memo = doc.getString("memo").orEmpty(),
             done = doc.getBoolean("done") ?: false,
+        )
+    }
+}
+
+/**
+ * 일정 고치기 기록. 계약서에서 뽑은 일정을 고치거나 숨기고(kind=edit), 직접 일정을 추가한다(kind=custom).
+ * "계약서 내용으로 다시 적용"을 누르면 edit 기록을 지워 계약서에서 뽑은 그대로 돌아간다.
+ */
+data class ScheduleEdit(
+    val id: String,
+    /** "edit" 또는 "custom" */
+    val kind: String,
+    /** kind=edit 일 때 고친 원래 일정의 키 */
+    val eventKey: String,
+    val hidden: Boolean,
+    val type: String,
+    val date: String,
+    val detail: String,
+    val folderId: String?,
+    val folderName: String,
+) {
+    companion object {
+        fun from(doc: DocumentSnapshot) = ScheduleEdit(
+            id = doc.id,
+            kind = doc.getString("kind").orEmpty(),
+            eventKey = doc.getString("eventKey").orEmpty(),
+            hidden = doc.getBoolean("hidden") ?: false,
+            type = doc.getString("type").orEmpty(),
+            date = doc.getString("date").orEmpty(),
+            detail = doc.getString("detail").orEmpty(),
+            folderId = doc.getString("folderId"),
+            folderName = doc.getString("folderName").orEmpty(),
         )
     }
 }
@@ -101,7 +139,102 @@ object ScheduleRepository {
                 add("취득 예정", a.acquisitionDate, formatWonKr(a.acquisitionAmount))
             }
         }
-        return out.distinctBy { it.key }.sortedBy { it.date }
+        // 같은 서류가 두 번 올라간 경우 등: 같은 폴더·같은 종류·같은 날짜는 하나만
+        return out.distinctBy { "${it.folderId ?: it.contractId}|${it.type}|${it.date}" }.sortedBy { it.date }
+    }
+
+    private fun edits() = db.collection("users").document(uid()).collection("scheduleEdits")
+
+    /** 계약서에서 뽑은 일정에 사용자의 수정·숨김·추가를 반영한 최종 일정 (오늘 이후, 날짜순) */
+    fun applyEdits(events: List<ScheduleEvent>, editList: List<ScheduleEdit>): List<ScheduleEvent> {
+        val today = today()
+        val byKey = editList.filter { it.kind == "edit" }.associateBy { it.eventKey }
+        val derived = events.mapNotNull { e ->
+            val o = byKey[e.key] ?: return@mapNotNull e
+            if (o.hidden) return@mapNotNull null
+            e.copy(
+                type = o.type.ifBlank { e.type },
+                date = o.date.takeIf { isValidDate(it) } ?: e.date,
+                detail = o.detail.ifBlank { e.detail },
+                origin = e.key,
+                edited = true,
+            )
+        }
+        val custom = editList.filter { it.kind == "custom" && !it.hidden && isValidDate(it.date) }.map { o ->
+            ScheduleEvent(
+                folderId = o.folderId, folderName = o.folderName.ifBlank { "직접 추가한 일정" },
+                contractId = "custom:${o.id}", type = o.type.ifBlank { "일정" }, date = o.date, detail = o.detail,
+                origin = "custom|${o.id}", custom = true,
+            )
+        }
+        return (derived + custom).filter { it.date >= today }.sortedBy { it.date }
+    }
+
+    fun editsFlow(): Flow<List<ScheduleEdit>> = callbackFlow {
+        val registration = edits().addSnapshotListener { snapshot, error ->
+            if (error != null) {
+                close(error)
+                return@addSnapshotListener
+            }
+            trySend(snapshot?.documents.orEmpty().map(ScheduleEdit::from))
+        }
+        awaitClose { registration.remove() }
+    }
+
+    suspend fun allEdits(): List<ScheduleEdit> = edits().get().await().documents.map(ScheduleEdit::from)
+
+    private fun editDocId(eventKey: String) = "edit_" + eventKey.replace("/", "_").take(400)
+
+    /** 일정 고치기 (계약서에서 뽑은 일정이면 고친 기록, 직접 추가한 일정이면 그 내용 자체) */
+    suspend fun saveEvent(event: ScheduleEvent, type: String, date: String, detail: String, folderName: String) {
+        require(isValidDate(date)) { "날짜를 YYYY-MM-DD 형식으로 입력해 주세요." }
+        if (event.custom) {
+            edits().document(event.contractId.removePrefix("custom:")).update(
+                mapOf("type" to type, "date" to date, "detail" to detail, "folderName" to folderName, "updatedAt" to FieldValue.serverTimestamp()),
+            ).await()
+        } else {
+            edits().document(editDocId(event.key)).set(
+                mapOf(
+                    "kind" to "edit", "eventKey" to event.key, "hidden" to false,
+                    "type" to type, "date" to date, "detail" to detail,
+                    "folderId" to event.folderId, "folderName" to folderName,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+            ).await()
+        }
+    }
+
+    /** 일정 지우기 (계약서에서 뽑은 일정은 숨기기 — "다시 적용"으로 되살릴 수 있다) */
+    suspend fun deleteEvent(event: ScheduleEvent) {
+        if (event.custom) {
+            edits().document(event.contractId.removePrefix("custom:")).delete().await()
+        } else {
+            edits().document(editDocId(event.key)).set(
+                mapOf(
+                    "kind" to "edit", "eventKey" to event.key, "hidden" to true,
+                    "folderId" to event.folderId, "folderName" to event.folderName,
+                    "updatedAt" to FieldValue.serverTimestamp(),
+                ),
+            ).await()
+        }
+    }
+
+    /** 일정 직접 추가 */
+    suspend fun addEvent(folderId: String?, folderName: String, type: String, date: String, detail: String) {
+        require(isValidDate(date)) { "날짜를 YYYY-MM-DD 형식으로 입력해 주세요." }
+        edits().document().set(
+            mapOf(
+                "kind" to "custom", "hidden" to false, "type" to type, "date" to date, "detail" to detail,
+                "folderId" to folderId, "folderName" to folderName, "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+        ).await()
+    }
+
+    /** 계약서 내용으로 다시 적용: 고치거나 숨긴 기록을 지운다 (직접 추가한 일정은 남김). 지운 건수를 돌려준다. */
+    suspend fun resetEdits(): Int {
+        val list = edits().whereEqualTo("kind", "edit").get().await().documents
+        list.forEach { it.reference.delete().await() }
+        return list.size
     }
 
     fun plansFlow(): Flow<List<Plan>> = callbackFlow {

@@ -8,6 +8,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -266,7 +268,7 @@ fun FolderCard(
     }
 }
 
-/** 목록으로 보기: 사진 없이 한 줄로 촘촘하게 */
+/** 목록으로 보기: 사진 없이 한 줄로 촘촘하게 (한 화면에 많이) */
 @Composable
 fun FolderRow(
     folder: Folder,
@@ -276,25 +278,76 @@ fun FolderRow(
     selected: Boolean? = null,
 ) {
     SelectableCard(onClick, onLongClick, selected, compact = true) {
-        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
             SelectCheck(selected)
-            Column(Modifier.weight(1f)) {
-                Text(
-                    folder.name,
-                    color = Brand.Navy,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                val meta = listOfNotNull(
-                    folder.stakeholderNames.takeIf { it.isNotEmpty() }?.joinToString(", "),
-                    "계약서 ${contractCount}건",
-                )
-                Text(meta.joinToString(" · "), color = Brand.TextSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            Text(
+                folder.name,
+                color = Brand.Navy,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 200.dp),
+            )
             Spacer(Modifier.width(8.dp))
+            Text(
+                listOfNotNull(
+                    folder.stakeholderNames.takeIf { it.isNotEmpty() }?.joinToString(", "),
+                    "${contractCount}건",
+                ).joinToString(" · "),
+                color = Brand.TextSub,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(6.dp))
             StatusBadge(folder.status)
+        }
+    }
+}
+
+/** 바둑판 보기: 사진이 큰 작은 칸 */
+@Composable
+fun FolderTile(
+    folder: Folder,
+    contractCount: Int,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean? = null,
+) {
+    SelectableCard(onClick, onLongClick, selected, compact = true) {
+        Column {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1.3f)
+                    .background(Brand.CardTint),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (folder.thumbnail != null) {
+                    AsyncImage(
+                        model = folder.thumbnail,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Icon(Icons.Filled.Folder, contentDescription = null, tint = Brand.Divider, modifier = Modifier.size(40.dp))
+                }
+                if (selected != null) {
+                    Box(Modifier.align(Alignment.TopStart).padding(6.dp)) { SelectCheck(selected) }
+                }
+            }
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text(folder.name, color = Brand.Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusBadge(folder.status)
+                    Spacer(Modifier.width(6.dp))
+                    Text("${contractCount}건", color = Brand.TextSub, fontSize = 12.sp, maxLines = 1)
+                }
+            }
         }
     }
 }

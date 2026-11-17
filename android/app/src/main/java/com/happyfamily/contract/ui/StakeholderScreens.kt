@@ -82,7 +82,7 @@ fun StakeholdersScreen(onBack: () -> Unit, onOpenReport: (String) -> Unit) {
     val snackbar = remember { SnackbarHostState() }
 
     fun launch(block: suspend () -> Unit) = scope.launch {
-        runCatching { block() }.onFailure { snackbar.showSnackbar(it.message ?: it.toString()) }
+        runCatching { block() }.onFailure { snackbar.showSnackbar(friendlyError(it)) }
     }
 
     Scaffold(
