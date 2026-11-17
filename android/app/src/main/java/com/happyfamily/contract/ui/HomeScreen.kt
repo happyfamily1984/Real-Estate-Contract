@@ -482,15 +482,15 @@ private fun LazyListScope.folderSection(
         ViewMode.LIST -> items(folders, key = { "f-" + it.id }) { f ->
             FolderRow(f, counts[f.id] ?: 0, { onClick(f) }, { longClick(f) }, selecting?.contains(f.id))
         }
-        // 바둑판: 한 줄에 두 개씩
-        ViewMode.GRID -> items(folders.chunked(2), key = { "g-" + it.first().id }) { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 3.dp)) {
+        // 바둑판: 이름만 한 줄에 세 개씩
+        ViewMode.GRID -> items(folders.chunked(3), key = { "g-" + it.first().id }) { row ->
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 1.dp)) {
                 row.forEach { f ->
                     Box(Modifier.weight(1f)) {
                         FolderTile(f, counts[f.id] ?: 0, { onClick(f) }, { longClick(f) }, selecting?.contains(f.id))
                     }
                 }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
         ViewMode.CARD -> items(folders, key = { "f-" + it.id }) { f ->
@@ -539,7 +539,7 @@ private fun SortAndViewBar(
         }
         Spacer(Modifier.weight(1f))
         listOf(
-            ViewMode.CARD to (Icons.Outlined.ViewAgenda to "사진 포함"),
+            ViewMode.CARD to (Icons.Outlined.ViewAgenda to "자세히"),
             ViewMode.LIST to (Icons.AutoMirrored.Outlined.ViewList to "목록"),
             ViewMode.GRID to (Icons.Outlined.GridView to "바둑판"),
         ).forEach { (mode, iconLabel) ->

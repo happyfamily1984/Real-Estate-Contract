@@ -226,8 +226,6 @@ fun FolderCard(
     SelectableCard(onClick, onLongClick, selected) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             SelectCheck(selected)
-            Thumbnail(folder.thumbnail, size = 68.dp)
-            Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -246,10 +244,11 @@ fun FolderCard(
                     Text(folder.address, color = Brand.TextSub, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.height(4.dp))
-                val latest = folder.summaryEntries.lastOrNull { it.ongoing } ?: folder.summaryEntries.lastOrNull()
-                if (latest != null) {
+                // 계약내용정리 (최근 것부터 최대 4건, 줄마다 한 줄)
+                val lines = SummaryText.lines(folder.summaryEntries).lines().filter { it.isNotBlank() }
+                lines.takeLast(4).forEach { line ->
                     Text(
-                        highlightSummary(SummaryText.line(latest)),
+                        highlightSummary(line),
                         color = Brand.Navy,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
@@ -257,6 +256,7 @@ fun FolderCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                if (lines.size > 4) Text("외 ${lines.size - 4}건", color = Brand.TextSub, fontSize = 12.sp)
                 Spacer(Modifier.height(2.dp))
                 val meta = listOfNotNull(
                     "계약서 ${contractCount}건",
@@ -307,7 +307,7 @@ fun FolderRow(
     }
 }
 
-/** 바둑판 보기: 사진이 큰 작은 칸 */
+/** 바둑판 보기: 사진 없이 이름만 여러 개 */
 @Composable
 fun FolderTile(
     folder: Folder,
@@ -317,36 +317,27 @@ fun FolderTile(
     selected: Boolean? = null,
 ) {
     SelectableCard(onClick, onLongClick, selected, compact = true) {
-        Column {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1.3f)
-                    .background(Brand.CardTint),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (folder.thumbnail != null) {
-                    AsyncImage(
-                        model = folder.thumbnail,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Icon(Icons.Filled.Folder, contentDescription = null, tint = Brand.Divider, modifier = Modifier.size(40.dp))
-                }
-                if (selected != null) {
-                    Box(Modifier.align(Alignment.TopStart).padding(6.dp)) { SelectCheck(selected) }
-                }
-            }
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                Text(folder.name, color = Brand.Navy, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    StatusBadge(folder.status)
-                    Spacer(Modifier.width(6.dp))
-                    Text("${contractCount}건", color = Brand.TextSub, fontSize = 12.sp, maxLines = 1)
-                }
+        Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp)) {
+            Text(
+                folder.name,
+                color = Brand.Navy,
+                fontSize = 14.sp,
+                lineHeight = 18.sp,
+                fontWeight = FontWeight.Bold,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (selected != null) SelectCheck(selected)
+                Text(
+                    folder.status.label,
+                    color = if (folder.status == FolderStatus.ONGOING) Brand.Blue else Brand.TextSub,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(" · ${contractCount}건", color = Brand.TextSub, fontSize = 11.sp, maxLines = 1)
             }
         }
     }
