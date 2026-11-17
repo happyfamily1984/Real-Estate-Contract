@@ -60,8 +60,10 @@ class AllAiUnavailableException(val reasons: List<String>) :
  * 모두 안 되면 [AllAiUnavailableException] → 호출한 쪽이 기기 안 분석으로 대신한다.
  */
 object AiGateway {
-    /** 404 가 나는 별칭(gemini-flash-latest) 대신 이름이 고정된 모델을 바로 쓴다. */
-    val MODELS = listOf("gemini-2.5-flash", "gemini-2.5-flash-lite")
+    /** 분석·키 확인에 쓰는 모델 (앞에서부터 차례로). AI 설정 화면에서 바꿀 수 있다([ModelStore]). */
+    val DEFAULT_MODELS = listOf("gemini-3.8-flash", "gemini-3.1-flash-lite")
+
+    fun models(context: Context): List<String> = ModelStore.models(context)
 
     private const val TIMEOUT_MS = 4 * 60_000L
 
@@ -76,13 +78,14 @@ object AiGateway {
     )
 
     fun routes(context: Context): List<Route> {
-        val firebase = MODELS.map { model ->
+        val models = models(context)
+        val firebase = models.map { model ->
             Route("firebase:$model", "Firebase Gemini · $model", model) { schema, system, parts ->
                 callFirebase(model, schema, system, parts)
             }
         }
         val keys = ApiKeyStore.keys(context).flatMapIndexed { i, key ->
-            MODELS.map { model ->
+            models.map { model ->
                 Route("key:${key.takeLast(6)}:$model", "내 API 키 ${i + 1} (${ApiKeyStore.mask(key)}) · $model", model) { schema, system, parts ->
                     GeminiRest.generate(key, model, schema, system, parts, TIMEOUT_MS)
                 }
@@ -265,4 +268,25 @@ object Cooldowns {
         val next = ZonedDateTime.now(pacific).toLocalDate().plusDays(1).atStartOfDay(pacific)
         return next.toInstant().toEpochMilli() + 5 * 60_000L
     }
+}
+
+/** 사용할 모델 이름 목록 (AI 설정에서 바꿀 수 있음). 휴대폰 안에 저장된다. */
+object ModelStore {
+    private const val PREFS = "ai_models"
+    private const val KEY = "models"
+
+    fun models(context: Context): List<String> =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY, null)
+            ?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }
+            ?: AiGateway.DEFAULT_MODELS
+
+    /** 쉼표·줄바꿈으로 구분된 이름들. 비우면 기본값으로 돌아간다. */
+    fun save(context: Context, text: String) {
+        val list = text.split(",", "\n").map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().apply {
+            if (list.isEmpty()) remove(KEY) else putString(KEY, list.joinToString(","))
+        }.apply()
+    }
+
+    fun isDefault(context: Context) = models(context) == AiGateway.DEFAULT_MODELS
 }

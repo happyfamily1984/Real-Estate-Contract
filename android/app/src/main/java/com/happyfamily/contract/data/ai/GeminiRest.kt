@@ -140,20 +140,26 @@ object ApiKeyStore {
      * 키가 실제로 동작하는지 아주 짧은 요청으로 확인한다.
      * 결과: (저장해도 되는지, 안내 문구). 한도·과부하는 키 자체는 정상이므로 저장해도 된다.
      */
-    suspend fun test(key: String): Pair<Boolean, String> {
-        val error = runCatching {
-            GeminiRest.generate(
-                key.trim(), AiGateway.MODELS.last(),
-                AiSchema.Obj(mapOf("ok" to AiSchema.Str())),
-                "JSON 으로만 답합니다.",
-                listOf(AiPart.Text("ok 필드에 \"네\" 라고 넣어 주세요.")),
-                timeoutMs = 30_000,
-            )
-        }.exceptionOrNull() ?: return true to "키가 정상입니다."
-        val f = AiGateway.classify(error)
-        return when (f.kind) {
-            AiFailure.Kind.QUOTA, AiFailure.Kind.OVERLOADED -> true to "키는 정상이지만 지금은 ${f.message}"
-            else -> false to (f.message ?: "확인 실패")
+    suspend fun test(context: Context, key: String): Pair<Boolean, String> {
+        var last: AiFailure? = null
+        // 모델 순서대로 시도해서 하나라도 되면 정상. 404(모델 없음)면 다음 모델로.
+        for (model in AiGateway.models(context)) {
+            val error = runCatching {
+                GeminiRest.generate(
+                    key.trim(), model,
+                    AiSchema.Obj(mapOf("ok" to AiSchema.Str())),
+                    "JSON 으로만 답합니다.",
+                    listOf(AiPart.Text("ok 필드에 \"네\" 라고 넣어 주세요.")),
+                    timeoutMs = 30_000,
+                )
+            }.exceptionOrNull() ?: return true to "키가 정상입니다 ($model 확인)."
+            val f = AiGateway.classify(error)
+            when (f.kind) {
+                AiFailure.Kind.QUOTA, AiFailure.Kind.OVERLOADED -> return true to "키는 정상이지만 지금은 ${f.message} ($model)"
+                AiFailure.Kind.AUTH -> return false to (f.message ?: "키 확인 실패")
+                else -> last = f
+            }
         }
+        return false to (last?.message ?: "확인 실패")
     }
 }

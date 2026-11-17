@@ -55,6 +55,7 @@ import com.happyfamily.contract.data.UpgradeWorker
 import com.happyfamily.contract.data.ai.AiGateway
 import com.happyfamily.contract.data.ai.ApiKeyStore
 import com.happyfamily.contract.data.ai.Cooldowns
+import com.happyfamily.contract.data.ai.ModelStore
 import com.happyfamily.contract.ui.theme.Brand
 import kotlinx.coroutines.launch
 
@@ -96,7 +97,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
         ) {
             item {
                 SettingsCard("분석 순서") {
-                    Step("1", "Firebase Gemini (무료)", "모델 ${AiGateway.MODELS.joinToString(" → ")} 순서. 모델마다 무료 한도가 따로라 하나가 막히면 다음 모델로 넘어갑니다. 서버가 붐비면(503) 잠시 뒤 자동으로 다시 시도합니다.")
+                    Step("1", "Firebase Gemini (무료)", "모델 ${AiGateway.models(context).joinToString(" → ")} 순서. 모델마다 무료 한도가 따로라 하나가 막히면 다음 모델로 넘어갑니다. 서버가 붐비면(503) 잠시 뒤 자동으로 다시 시도합니다.")
                     Step("2", "내 Gemini API 키 (선택)", "아래에 넣은 키를 차례로 씁니다. 키마다 한도가 따로라 가족 구글 계정으로 만든 키를 여러 개 넣으면 그만큼 더 쓸 수 있습니다.")
                     Step("3", "휴대폰 안 글자 인식 (항상 동작)", "AI 를 전혀 못 쓰면 휴대폰이 직접 글자를 읽어 금액·날짜·주소를 규칙으로 뽑습니다. 인터넷·한도 없이 되지만 정확도는 낮습니다.")
                     Step("4", "자동 다시 분석", "3번으로 만든 기본 결과는 AI 를 다시 쓸 수 있게 되면 자동으로 AI 로 다시 분석합니다.")
@@ -147,6 +148,40 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                 }
             }
             item {
+                var modelsText by remember(refresh) { mutableStateOf(AiGateway.models(context).joinToString(", ")) }
+                SettingsCard("사용할 모델") {
+                    Text(
+                        "앞에서부터 차례로 씁니다. 구글이 모델 이름을 바꾸면 여기서 고치세요. 이름이 없는 모델(404)은 자동으로 건너뜁니다.",
+                        color = Brand.TextSub,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = modelsText,
+                        onValueChange = { modelsText = it },
+                        label = { Text("모델 이름 (쉼표로 구분)") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row {
+                        Button(onClick = {
+                            ModelStore.save(context, modelsText)
+                            Cooldowns.clearAll(context)
+                            refresh++
+                            scope.launch { snackbar.showSnackbar("모델 순서를 저장했어요.") }
+                        }) { Text("저장") }
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(onClick = {
+                            ModelStore.save(context, "")
+                            Cooldowns.clearAll(context)
+                            refresh++
+                            scope.launch { snackbar.showSnackbar("기본 모델 순서로 되돌렸어요.") }
+                        }) { Text("기본값으로") }
+                    }
+                }
+            }
+            item {
                 SettingsCard("내 Gemini API 키") {
                     Text(
                         "Google AI Studio 에서 무료로 만들 수 있습니다. 키는 이 휴대폰 안에만 저장되고 클라우드·GitHub 로 올라가지 않습니다.",
@@ -180,7 +215,7 @@ fun AiSettingsScreen(onBack: () -> Unit) {
                             onClick = {
                                 testing = true
                                 scope.launch {
-                                    val (ok, message) = ApiKeyStore.test(newKey)
+                                    val (ok, message) = ApiKeyStore.test(context, newKey)
                                     testing = false
                                     if (ok) {
                                         ApiKeyStore.add(context, newKey)

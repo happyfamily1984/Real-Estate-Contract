@@ -20,8 +20,16 @@ class AiGatewayTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
-    fun `모델은 2_5 flash 와 flash-lite 를 바로 쓴다`() {
-        assertEquals(listOf("gemini-2.5-flash", "gemini-2.5-flash-lite"), AiGateway.MODELS)
+    fun `모델 순서 기본값과 직접 바꾸기`() {
+        com.happyfamily.contract.data.ai.ModelStore.save(context, "")
+        assertEquals(
+            listOf("gemini-3.8-flash", "gemini-3.1-flash-lite"),
+            AiGateway.models(context),
+        )
+        com.happyfamily.contract.data.ai.ModelStore.save(context, "gemini-x-flash,\n gemini-y-lite ,gemini-x-flash")
+        assertEquals(listOf("gemini-x-flash", "gemini-y-lite"), AiGateway.models(context))
+        assertEquals(2, AiGateway.routes(context).size) // Firebase 경로 2개 (키 없음)
+        com.happyfamily.contract.data.ai.ModelStore.save(context, "")
     }
 
     @Test
@@ -35,7 +43,7 @@ class AiGatewayTest {
     @Test
     fun `한도에 두 번 걸리면 하루 쉬고 성공하면 풀린다`() {
         Cooldowns.clearAll(context)
-        val id = "firebase:gemini-2.5-flash"
+        val id = "firebase:gemini-3.8-flash"
         Cooldowns.failure(context, id, AiFailure.Kind.QUOTA)
         val first = Cooldowns.until(context, id) - System.currentTimeMillis()
         assertTrue(first in 60_000..120_000) // 처음엔 2분
