@@ -212,6 +212,8 @@ object FolderRepository {
         newFolderName: String = "",
     ): Pair<String, String> {
         require(contracts.isNotEmpty()) { "옮길 계약서를 골라 주세요." }
+        // 옮길 폴더에 같은 파일이 이미 있으면 옮기지 않는다.
+        if (targetId != null) contracts.forEach { ContractRepository.ensureNotDuplicateIn(targetId, it) }
         val first = contracts.firstOrNull { it.analysis != null } ?: contracts.first()
         val (folderId, folderName) = if (targetId != null) {
             targetId to (get(targetId)?.name ?: "")

@@ -112,6 +112,8 @@ data class Contract(
     val confirmed: Boolean = true,
     /** 새로 올린 계약서에 AI 가 제안한 기존 폴더 (없으면 새 폴더 제안 — 이름은 analysis.folderName) */
     val suggestedFolderId: String? = null,
+    /** 페이지 사진마다의 지문(SHA-256). 같은 파일이 또 올라오거나 옮겨지는 것을 막는 데 쓴다. */
+    val pageHashes: List<String> = emptyList(),
 ) {
     /** 검색어가 주소, 당사자 이름, 메모 등에 들어 있는지. */
     fun matches(query: String): Boolean {
@@ -145,6 +147,7 @@ data class Contract(
                 // 예전 계약서에는 이 값이 없으므로 확인된 것으로 본다.
                 confirmed = doc.getBoolean("confirmed") ?: true,
                 suggestedFolderId = doc.getString("suggestedFolderId")?.takeIf { it.isNotBlank() },
+                pageHashes = (doc.get("pageHashes") as? List<*>)?.filterIsInstance<String>().orEmpty(),
             )
         }
 

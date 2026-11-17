@@ -31,6 +31,9 @@ import kotlin.math.max
  *
  * 사진을 저장하고 status = "pending" 으로 만든 뒤 [AnalyzeWorker] 가 Gemini 로 분석한다.
  */
+/** 같은 파일이 이미 있어서 올리거나 옮기지 않았을 때 */
+class DuplicateContractException(message: String) : Exception(message)
+
 object ContractRepository {
     /** 계약서 한 건의 최대 페이지 수 */
     const val MAX_PAGES = 50
@@ -131,6 +134,7 @@ object ContractRepository {
         val doc = contracts(uid).document()
 
         var thumbnail: ByteArray? = null
+        val hashes = mutableListOf<String>()
         pages.forEachIndexed { index, page ->
             onProgress(index, pages.size)
             val (jpeg, thumb) = withContext(Dispatchers.IO) {
@@ -141,11 +145,21 @@ object ContractRepository {
                 result
             }
             if (thumb != null) thumbnail = thumb
+            hashes += sha(jpeg)
             pages(uid, doc.id).document("$index")
                 .set(mapOf("index" to index, "image" to Blob.fromBytes(jpeg)))
                 .await()
         }
         onProgress(pages.size, pages.size)
+
+        // 같은 파일이 이미 올라가 있으면 (폴더 안에서 올릴 때는 그 폴더 안에서) 넣지 않는다.
+        val duplicate = runCatching { allContracts() }.getOrDefault(emptyList()).firstOrNull { c ->
+            c.pageHashes.isNotEmpty() && c.pageHashes.containsAll(hashes) && (folderId == null || c.folderId == folderId)
+        }
+        if (duplicate != null) {
+            for (i in pages.indices) runCatching { pages(uid, doc.id).document("$i").delete().await() }
+            throw DuplicateContractException("이미 올라간 계약서입니다 (${duplicate.title.ifBlank { "분석 중" }})")
+        }
 
         doc.set(
             buildMap {
@@ -154,6 +168,7 @@ object ContractRepository {
                 put("thumbnail", thumbnail?.let(Blob::fromBytes))
                 put("memo", "")
                 put("title", "분석 중인 계약서")
+                put("pageHashes", hashes)
                 if (folderId != null) put("folderId", folderId)
                 // 폴더 안에서 올렸으면 이미 확인된 것, 아니면 '새로 올린 계약서 정리'에서 확인
                 put("confirmed", folderId != null)
@@ -273,9 +288,11 @@ object ContractRepository {
                 index++
             }
         }
+        val mergedHashes = ordered.flatMap { hashesOf(it) }
         contracts(uid).document(target.id).update(
             mapOf(
                 "pageCount" to index,
+                "pageHashes" to mergedHashes,
                 "status" to "pending",
                 "error" to FieldValue.delete(),
                 "updatedAt" to FieldValue.serverTimestamp(),
@@ -284,6 +301,29 @@ object ContractRepository {
         ordered.drop(1).forEach { delete(it) }
         AnalyzeWorker.enqueue(context, target.id)
         return target.id
+    }
+
+    private fun sha(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
+    /** 계약서의 페이지 지문. 예전 계약서라 저장된 것이 없으면 사진을 읽어 계산하고 저장해 둔다. */
+    private suspend fun hashesOf(c: Contract): List<String> {
+        if (c.pageHashes.size == c.pageCount && c.pageCount > 0) return c.pageHashes
+        val hashes = (0 until c.pageCount).map { sha(pageImage(c.id, it)) }
+        runCatching { contracts(uid()).document(c.id).update("pageHashes", hashes).await() }
+        return hashes
+    }
+
+    /** [folderId] 폴더에 이 페이지들을 모두 담은 계약서가 이미 있는지 ([exceptId] 는 빼고) */
+    private suspend fun folderHasPages(folderId: String, hashes: List<String>, exceptId: String?): Boolean =
+        contractsInFolder(folderId).any { (c, _) -> c.id != exceptId && hashesOf(c).containsAll(hashes) }
+
+    /** 계약서 전체를 [folderId] 로 옮기기 전에: 같은 계약서가 그 폴더에 이미 있으면 막는다. */
+    suspend fun ensureNotDuplicateIn(folderId: String, contract: Contract) {
+        if (contract.folderId == folderId) return
+        if (folderHasPages(folderId, hashesOf(contract), contract.id)) {
+            throw DuplicateContractException("이미 옮겨진 계약서입니다. 그 폴더에 같은 파일이 있어요.")
+        }
     }
 
     private fun thumbnailOfJpeg(jpeg: ByteArray): ByteArray? =
@@ -302,6 +342,10 @@ object ContractRepository {
         val all = (0 until contract.pageCount).map { pageImage(contract.id, it) }
         val moved = moving.map { all[it] }
         val remaining = all.filterIndexed { i, _ -> i !in moving }
+        val movedHashes = moved.map(::sha)
+        if (folderHasPages(folderId, movedHashes, contract.id)) {
+            throw DuplicateContractException("이미 옮겨진 계약서입니다. 그 폴더에 같은 파일이 있어요.")
+        }
 
         // 1) 새 계약서 만들기
         val doc = contracts(uid).document()
@@ -317,6 +361,7 @@ object ContractRepository {
                 "title" to "분석 중인 계약서",
                 "folderId" to folderId,
                 "confirmed" to true,
+                "pageHashes" to movedHashes,
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
@@ -327,16 +372,19 @@ object ContractRepository {
             pages(uid, contract.id).document("$i").set(mapOf("index" to i, "image" to Blob.fromBytes(bytes))).await()
         }
         for (i in remaining.size until contract.pageCount) pages(uid, contract.id).document("$i").delete().await()
+        // 화면이 예전 사진을 다시 보여 주지 않도록, 계약서 정보를 바꾸기 전에 받아 둔 사진을 남은 페이지로 바꿔 둔다.
+        pageCache.keys.removeAll { it.startsWith("${contract.id}/") }
+        remaining.forEachIndexed { i, bytes -> pageCache["${contract.id}/$i"] = bytes }
         contracts(uid).document(contract.id).update(
             mapOf(
                 "pageCount" to remaining.size,
+                "pageHashes" to remaining.map(::sha),
                 "thumbnail" to thumbnailOfJpeg(remaining.first())?.let(Blob::fromBytes),
                 "status" to "pending",
                 "error" to FieldValue.delete(),
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
-        pageCache.keys.removeAll { it.startsWith("${contract.id}/") }
 
         AnalyzeWorker.enqueue(context, doc.id)
         AnalyzeWorker.enqueue(context, contract.id)
