@@ -72,7 +72,7 @@ object SummaryText {
         appendLine("${folder.name} 계약내용정리")
         val info = listOfNotNull(
             folder.address.takeIf { it.isNotBlank() },
-            folder.stakeholder.takeIf { it.isNotBlank() }?.let { "이해관계자 $it" },
+            folder.stakeholderNames.takeIf { it.isNotEmpty() }?.let { "이해관계자 ${it.joinToString(", ")}" },
             folder.status.label,
         )
         appendLine(info.joinToString(" · "))
@@ -140,16 +140,15 @@ data class FolderSummary(
  * 이름이 당사자 이름에 들어 있는지로 매수/매도, 임차/임대를 정한다.
  */
 object LocalSummarizer {
-    fun summarize(folderId: String, stakeholder: String, contracts: List<Contract>): FolderSummary {
+    fun summarize(folderId: String, stakeholders: List<String>, contracts: List<Contract>): FolderSummary {
         val now = today()
-        val name = stakeholder.trim()
         val analyzed = contracts.filter { it.analysis != null }
             .sortedBy { it.analysis!!.representativeDate.ifBlank { "9999" } }
 
         val entries = analyzed.map { c ->
             val a = c.analysis!!
-            val isUser = name.isNotBlank() && a.lessee.name.contains(name)
-            val isOwner = name.isNotBlank() && a.lessor.name.contains(name)
+            val isUser = stakeholders.any { Stakeholders.appearsIn(it, a.lessee.name) }
+            val isOwner = stakeholders.any { Stakeholders.appearsIn(it, a.lessor.name) }
             val role = when {
                 a.isSale && isUser -> "매수"
                 a.isSale && isOwner -> "매도"
@@ -176,13 +175,15 @@ object LocalSummarizer {
         }
 
         // 마지막 매수 이후 매도가 없으면 보유 중, 임대차는 종료일이 지나지 않았으면 진행 중
+        // (이해관계자가 없으면 역할을 모르므로 임대차 기간만 본다)
         val lastBuy = entries.indexOfLast { it.role == "매수" }
         val soldAfter = lastBuy >= 0 && entries.drop(lastBuy + 1).any { it.role == "매도" }
         val marked = entries.mapIndexed { i, e ->
             val ongoing = when {
                 e.role == "매수" -> i == lastBuy && !soldAfter
                 e.kind == "전세" || e.kind == "월세" ->
-                    (e.role == "임차" || e.role == "임대") && (e.periodEnd.isBlank() || e.periodEnd >= now)
+                    (e.role == "임차" || e.role == "임대" || stakeholders.isEmpty()) &&
+                        (e.periodEnd.isBlank() || e.periodEnd >= now)
                 else -> false
             }
             e.copy(ongoing = ongoing)
@@ -194,4 +195,43 @@ object LocalSummarizer {
         }
         return FolderSummary(folderId, status, marked)
     }
+}
+
+/** 계약서 한눈에 보기: 소재지, 계약날짜, 계약기간, 금액, 계약자 (이것만) */
+object Glance {
+    data class Item(val label: String, val value: String)
+
+    fun items(a: ContractAnalysis): List<Item> = buildList {
+        if (a.propertyAddress.isNotBlank()) add(Item("소재지", a.propertyAddress))
+        if (a.contractDate.isNotBlank()) add(Item("계약날짜", formatShortDate(a.contractDate)))
+        if (a.contractType == "경매" && a.acquisitionDate.isNotBlank()) {
+            add(Item("취득일", formatShortDate(a.acquisitionDate) + if (a.acquisitionDateEstimated) " ${SummaryText.ESTIMATED_MARK}" else ""))
+        }
+        if (a.leaseStart.isNotBlank() || a.leaseEnd.isNotBlank()) {
+            add(Item("계약기간", "${formatShortDate(a.leaseStart)} ~ ${formatShortDate(a.leaseEnd)}"))
+        }
+        amounts(a).forEach { (label, value) -> add(Item(label, value)) }
+        parties(a)?.let { add(Item("계약자", it)) }
+    }
+
+    /** 금액 정보: 매매대금·분양금액·매각대금, 취득금액, 보증금, 월차임 */
+    fun amounts(a: ContractAnalysis): List<Pair<String, String>> = buildList {
+        if (a.salePrice > 0) {
+            val label = when (a.contractType) {
+                "분양" -> "분양금액"
+                "경매" -> "매각대금"
+                else -> "매매대금"
+            }
+            add(label to formatWonKr(a.salePrice))
+        }
+        if (a.acquisitionAmount > 0 && a.acquisitionAmount != a.salePrice) add("취득금액" to formatWonKr(a.acquisitionAmount))
+        if (a.deposit > 0) add("보증금" to formatWonKr(a.deposit))
+        if (a.monthlyRent > 0) add("월차임" to formatWonKr(a.monthlyRent))
+    }
+
+    /** "임대인 홍길동 · 임차인 박월세" */
+    fun parties(a: ContractAnalysis): String? = listOfNotNull(
+        a.lessor.name.takeIf { it.isNotBlank() }?.let { "${a.ownerLabel} $it" },
+        a.lessee.name.takeIf { it.isNotBlank() }?.let { "${a.userLabel} $it" },
+    ).joinToString(" · ").ifBlank { null }
 }

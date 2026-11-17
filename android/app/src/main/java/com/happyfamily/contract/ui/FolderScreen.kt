@@ -18,6 +18,13 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material.icons.automirrored.outlined.CallSplit
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.outlined.ArrowDropDown
+import androidx.compose.material.icons.outlined.CallMerge
+import androidx.compose.material3.Checkbox
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -115,7 +122,7 @@ fun FolderScreen(
         onToggleSort = { vm.newestFirst.value = !newestFirst },
         onRename = vm::rename,
         onSetStatus = vm::setStatus,
-        onSetStakeholder = vm::setStakeholder,
+        onSetStakeholders = vm::setStakeholders,
         onSaveSummary = vm::saveSummary,
         onApply = vm::apply,
         onCopy = { f?.let { copyToClipboard(context, it.name, SummaryText.folderDocument(it)) } },
@@ -123,6 +130,7 @@ fun FolderScreen(
         onDelete = { vm.delete(onBack) },
         onOpenContract = onOpenContract,
         onSplit = vm::split,
+        onMergeContracts = vm::mergeContracts,
     )
 }
 
@@ -140,8 +148,8 @@ internal fun FolderContent(
     onPickFiles: () -> Unit,
     onToggleSort: () -> Unit,
     onRename: (String) -> Unit,
-    onSetStatus: (FolderStatus) -> Unit,
-    onSetStakeholder: (String) -> Unit,
+    onSetStatus: (FolderStatus?) -> Unit,
+    onSetStakeholders: (List<String>) -> Unit,
     onSaveSummary: (String) -> Unit,
     onApply: () -> Unit,
     onCopy: () -> Unit,
@@ -149,11 +157,13 @@ internal fun FolderContent(
     onDelete: () -> Unit,
     onOpenContract: (String) -> Unit,
     onSplit: (List<Contract>, String) -> Unit = { _, _ -> },
+    onMergeContracts: (List<Contract>) -> Unit = {},
 ) {
     var renaming by remember { mutableStateOf(false) }
     /** null 이면 보통 화면, 아니면 분리하려고 고른 계약서 id 들 */
     var selecting by remember { mutableStateOf<Set<String>?>(null) }
     var splitting by remember { mutableStateOf(false) }
+    var mergingContracts by remember { mutableStateOf(false) }
     var choosingStatus by remember { mutableStateOf(false) }
     var choosingStakeholder by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -180,25 +190,35 @@ internal fun FolderContent(
         bottomBar = {
             selecting?.let { sel ->
                 val all = sel.size == contracts.size
+                val canSplit = sel.isNotEmpty() && !all
+                val canMerge = sel.size >= 2
                 Column(Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding().padding(16.dp)) {
                     Text(
-                        if (all) "모든 계약서를 고르면 분리할 수 없어요. 폴더 이름을 바꾸려면 이름을 누르세요."
-                        else "다른 부동산인 계약서를 고른 뒤 '분리하기'를 누르세요.",
+                        "같은 계약서의 앞뒷장이면 '합치기'(고른 순서대로 페이지를 붙임), 다른 부동산이면 '분리'를 누르세요.",
                         color = Brand.TextSub,
                         fontSize = 13.sp,
+                        lineHeight = 18.sp,
                     )
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        WhitePillButton(text = "취소", icon = Icons.Outlined.Close, onClick = { selecting = null }, height = 52.dp)
-                        GradientPillButton(
-                            text = "분리하기 (${sel.size})",
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        WhitePillButton(text = "취소", icon = Icons.Outlined.Close, onClick = { selecting = null }, height = 50.dp)
+                        WhitePillButton(
+                            text = "분리",
+                            icon = Icons.AutoMirrored.Outlined.CallSplit,
                             onClick = { splitting = true },
-                            enabled = sel.isNotEmpty() && !all,
+                            enabled = canSplit,
+                            height = 50.dp,
+                            modifier = Modifier.alpha(if (canSplit) 1f else 0.4f),
+                        )
+                        GradientPillButton(
+                            text = "합치기 (${sel.size})",
+                            onClick = { mergingContracts = true },
+                            enabled = canMerge,
                             showArrow = false,
-                            height = 52.dp,
-                            modifier = Modifier.weight(1f).alpha(if (sel.isNotEmpty() && !all) 1f else 0.5f),
+                            height = 50.dp,
+                            modifier = Modifier.weight(1f).alpha(if (canMerge) 1f else 0.5f),
                             leading = {
-                                Icon(Icons.AutoMirrored.Outlined.CallSplit, contentDescription = null, tint = Color.White)
+                                Icon(Icons.Outlined.CallMerge, contentDescription = null, tint = Color.White)
                             },
                         )
                     }
@@ -271,7 +291,7 @@ internal fun FolderContent(
                     Text("${contracts.size}", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     if (selecting == null && contracts.size >= 2) {
-                        TextButton(onClick = { selecting = emptySet() }) { Text("골라서 분리") }
+                        TextButton(onClick = { selecting = emptySet() }) { Text("골라서 합치기·분리") }
                     }
                     TextButton(onClick = onToggleSort) {
                         Icon(Icons.Outlined.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -294,6 +314,31 @@ internal fun FolderContent(
         }
     }
 
+    if (folder != null && mergingContracts) {
+        // 고른 순서 그대로 (먼저 고른 계약서가 앞 페이지)
+        val chosen = selecting.orEmpty().mapNotNull { id -> contracts.firstOrNull { it.id == id } }
+        AlertDialog(
+            onDismissRequest = { mergingContracts = false },
+            title = { Text("계약서 ${chosen.size}건을 하나로 합치기") },
+            text = {
+                Column {
+                    Text("고른 순서대로 페이지를 이어 붙여 한 계약서로 만들고, 합친 페이지로 다시 분석합니다.", color = Brand.TextSub, fontSize = 13.sp)
+                    Spacer(Modifier.height(8.dp))
+                    chosen.forEachIndexed { i, c ->
+                        Text("${i + 1}. ${c.title.ifBlank { "계약서" }} (${c.pageCount}페이지)", fontSize = 14.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    mergingContracts = false
+                    selecting = null
+                    onMergeContracts(chosen)
+                }) { Text("합치기") }
+            },
+            dismissButton = { TextButton(onClick = { mergingContracts = false }) { Text("취소") } },
+        )
+    }
     if (folder != null && splitting) {
         val chosen = contracts.filter { it.id in selecting.orEmpty() }
         TextInputDialog(
@@ -320,16 +365,23 @@ internal fun FolderContent(
     if (folder != null && choosingStatus) {
         AlertDialog(
             onDismissRequest = { choosingStatus = false },
-            title = { Text("폴더 상태") },
+            title = { Text("계약 상태") },
             text = {
                 Column {
                     Text(
-                        "보유 중이거나 임차·임대 중이면 진행중, 매도를 마쳤거나 계약이 끝났으면 완료입니다. 계약서 내용적용을 누르면 다시 자동으로 정해집니다.",
+                        "보유 중이거나 임차·임대 중이면 진행중, 매도를 마쳤거나 계약이 끝났으면 완료입니다. 직접 고르면 자동으로 바뀌지 않습니다.",
                         color = Brand.TextSub,
                         fontSize = 13.sp,
+                        lineHeight = 18.sp,
                     )
                     Spacer(Modifier.height(8.dp))
-                    FolderStatus.entries.forEach { s ->
+                    val options = listOf<Pair<FolderStatus?, String>>(
+                        FolderStatus.ONGOING to "진행중",
+                        FolderStatus.DONE to "완료",
+                        null to "자동 (계약 내용으로 판단)",
+                    )
+                    options.forEach { (s, label) ->
+                        val selected = if (s == null) !folder.statusManual else folder.statusManual && folder.status == s
                         Row(
                             Modifier
                                 .fillMaxWidth()
@@ -337,8 +389,8 @@ internal fun FolderContent(
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            RadioButton(selected = folder.status == s, onClick = { onSetStatus(s); choosingStatus = false })
-                            Text(s.label)
+                            RadioButton(selected = selected, onClick = { onSetStatus(s); choosingStatus = false })
+                            Text(label)
                         }
                     }
                 }
@@ -348,10 +400,10 @@ internal fun FolderContent(
     }
     if (folder != null && choosingStakeholder) {
         StakeholderPickerDialog(
-            current = folder.stakeholder,
+            current = folder.stakeholderNames,
             stakeholders = stakeholders,
             onDismiss = { choosingStakeholder = false },
-            onPick = { onSetStakeholder(it); choosingStakeholder = false },
+            onPick = { onSetStakeholders(it); choosingStakeholder = false },
         )
     }
     if (folder != null && confirmDelete) {
@@ -369,6 +421,7 @@ internal fun FolderContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun FolderHeader(folder: Folder, onRename: () -> Unit, onStatus: () -> Unit, onStakeholder: () -> Unit) {
     Card(
@@ -398,25 +451,49 @@ private fun FolderHeader(folder: Folder, onRename: () -> Unit, onStatus: () -> U
                     Text(folder.address, color = Brand.TextSub, fontSize = 13.sp, lineHeight = 18.sp)
                 }
                 Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.clip(RoundedCornerShape(50)).clickable(onClick = onStatus)) { StatusBadge(folder.status) }
-                    Spacer(Modifier.width(8.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    // 상태: 눌러서 바꾸기
                     Row(
                         Modifier
                             .clip(RoundedCornerShape(50))
-                            .background(Brand.CardTint)
-                            .clickable(onClick = onStakeholder)
-                            .padding(horizontal = 10.dp, vertical = 3.dp),
+                            .background(if (folder.status == FolderStatus.ONGOING) Brand.Blue else Brand.TextSub.copy(alpha = 0.15f))
+                            .clickable(onClick = onStatus)
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Outlined.Person, contentDescription = null, tint = Brand.Blue, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            folder.stakeholder.ifBlank { "이해관계자 입력" },
-                            color = Brand.Blue,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        val color = if (folder.status == FolderStatus.ONGOING) Color.White else Brand.Navy
+                        Text(folder.status.label, color = color, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        if (folder.statusManual) Text(" (직접)", color = color, fontSize = 10.sp)
+                        Icon(Icons.Outlined.ArrowDropDown, contentDescription = "상태 바꾸기", tint = color, modifier = Modifier.size(16.dp))
+                    }
+                    // 이해관계자: 계약서 당사자로 나오는 등록된 사람만 (여러 명 가능)
+                    folder.stakeholderNames.forEach { name ->
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(Brand.CardTint)
+                                .clickable(onClick = onStakeholder)
+                                .padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.Person, contentDescription = null, tint = Brand.Blue, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(name, color = Brand.Blue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable(onClick = onStakeholder)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.Edit, contentDescription = null, tint = Brand.TextSub, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(3.dp))
+                        Text("이해관계자", color = Brand.TextSub, fontSize = 12.sp)
                     }
                 }
             }
@@ -450,50 +527,55 @@ fun TextInputDialog(
     )
 }
 
-/** 이 폴더를 누구 기준으로 볼지 고른다. 새 이름을 입력하면 이해관계자로 추가된다. */
+/** 이 폴더의 이해관계자를 고른다 (여러 명 가능). 새 이름을 입력하면 이해관계자 목록에도 추가된다. */
 @Composable
 fun StakeholderPickerDialog(
-    current: String,
+    current: List<String>,
     stakeholders: List<Stakeholder>,
     onDismiss: () -> Unit,
-    onPick: (String) -> Unit,
+    onPick: (List<String>) -> Unit,
 ) {
+    var chosen by remember { mutableStateOf(current.toSet()) }
     var newName by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("이해관계자") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
                 Text(
-                    "이 폴더의 계약을 누구 입장에서 정리할지 고르세요. 그 사람 기준으로 매수·매도, 진행중·완료가 정해집니다.",
+                    "보통은 계약서의 임대인·임차인(매도인·매수인) 중 등록된 이름이 자동으로 들어갑니다. 여기서 직접 고칠 수 있고, '계약서 내용적용'을 누르면 다시 자동으로 맞춰집니다.",
                     color = Brand.TextSub,
                     fontSize = 13.sp,
                     lineHeight = 18.sp,
                 )
                 Spacer(Modifier.height(8.dp))
-                stakeholders.forEach { s ->
+                (stakeholders.map { it.name } + current).distinct().forEach { name ->
+                    val toggle = { chosen = if (name in chosen) chosen - name else chosen + name }
                     Row(
-                        Modifier.fillMaxWidth().clickable { onPick(s.name) }.padding(vertical = 2.dp),
+                        Modifier.fillMaxWidth().clickable(onClick = toggle).padding(vertical = 2.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        RadioButton(selected = current == s.name, onClick = { onPick(s.name) })
-                        Text(s.name + if (s.isDefault) " (기본)" else "")
+                        Checkbox(checked = name in chosen, onCheckedChange = { toggle() })
+                        Text(name)
                     }
                 }
-                if (stakeholders.isNotEmpty()) HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 OutlinedTextField(
                     value = newName,
                     onValueChange = { newName = it.take(30) },
                     singleLine = true,
-                    label = { Text("새 이름 입력") },
+                    label = { Text("새 이름 추가") },
                     placeholder = { Text("예: 홍길동") },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onPick(newName.trim()) }, enabled = newName.isNotBlank()) { Text("추가하고 선택") }
+            TextButton(onClick = {
+                val names = (chosen + listOfNotNull(newName.trim().takeIf { it.isNotBlank() })).toList()
+                onPick(names)
+            }) { Text("저장") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },
     )
 }

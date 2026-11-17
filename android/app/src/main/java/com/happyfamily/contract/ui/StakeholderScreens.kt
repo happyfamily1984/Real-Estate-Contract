@@ -19,9 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -77,6 +77,8 @@ fun StakeholdersScreen(onBack: () -> Unit, onOpenReport: (String) -> Unit) {
     val stakeholders by flow.collectAsStateWithLifecycle(initialValue = null)
     var newName by remember { mutableStateOf("") }
     var toDelete by remember { mutableStateOf<Stakeholder?>(null) }
+    var toRename by remember { mutableStateOf<Stakeholder?>(null) }
+    val context = LocalContext.current
     val snackbar = remember { SnackbarHostState() }
 
     fun launch(block: suspend () -> Unit) = scope.launch {
@@ -104,7 +106,7 @@ fun StakeholdersScreen(onBack: () -> Unit, onOpenReport: (String) -> Unit) {
         ) {
             item {
                 Text(
-                    "계약서를 보관하는 사람의 이름을 입력하세요. 폴더마다 이해관계자를 정하면 그 사람 기준으로 매수·매도, 진행중·완료가 정리됩니다. ★ 표시는 새 폴더에 기본으로 쓰는 사람입니다.",
+                    "본인·가족 등 이름을 입력하세요. 계약서의 임대인·임차인(매도인·매수인)에 이 이름이 있으면 그 폴더의 이해관계자로 자동 표시되고, 그 사람 기준으로 매수·매도, 진행중·완료가 정리됩니다. 계약서에 없는 이름은 표시되지 않습니다.",
                     color = Brand.TextSub,
                     fontSize = 14.sp,
                     lineHeight = 21.sp,
@@ -124,11 +126,26 @@ fun StakeholdersScreen(onBack: () -> Unit, onOpenReport: (String) -> Unit) {
                         onClick = {
                             val name = newName.trim()
                             newName = ""
-                            launch { FolderRepository.ensureStakeholder(name) }
+                            launch {
+                                FolderRepository.ensureStakeholder(name)
+                                val n = FolderRepository.reassignAllStakeholders(context)
+                                snackbar.showSnackbar(if (n > 0) "'$name' 을(를) 추가하고 폴더 ${n}개에 반영했어요." else "'$name' 을(를) 추가했어요. 이 이름이 나오는 계약서는 아직 없어요.")
+                            }
                         },
                         enabled = newName.isNotBlank(),
                     ) { Text("추가") }
                 }
+            }
+            item {
+                OutlinedButton(
+                    onClick = {
+                        launch {
+                            val n = FolderRepository.reassignAllStakeholders(context, includeManual = true)
+                            snackbar.showSnackbar("모든 폴더의 이해관계자를 계약서 당사자 기준으로 다시 맞췄어요. (바뀐 폴더 ${n}개)")
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("모든 폴더에 이해관계자 다시 적용") }
             }
             val list = stakeholders
             if (list == null) {
@@ -143,16 +160,13 @@ fun StakeholdersScreen(onBack: () -> Unit, onOpenReport: (String) -> Unit) {
                         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     ) {
                         Row(Modifier.padding(start = 6.dp, end = 12.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(onClick = { launch { FolderRepository.setDefaultStakeholder(s.id) } }) {
-                                Icon(
-                                    if (s.isDefault) Icons.Filled.Star else Icons.Outlined.StarOutline,
-                                    contentDescription = "기본 이해관계자로 지정",
-                                    tint = if (s.isDefault) Brand.Blue else Brand.TextSub,
-                                )
-                            }
+                            Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(s.name, color = Brand.Navy, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                                 Text("계약내용정리 문서 보기", color = Brand.TextSub, fontSize = 13.sp)
+                            }
+                            IconButton(onClick = { toRename = s }) {
+                                Icon(Icons.Outlined.Edit, contentDescription = "이름 수정", tint = Brand.TextSub)
                             }
                             IconButton(onClick = { toDelete = s }) {
                                 Icon(Icons.Outlined.Delete, contentDescription = "삭제", tint = Brand.TextSub)
@@ -165,13 +179,29 @@ fun StakeholdersScreen(onBack: () -> Unit, onOpenReport: (String) -> Unit) {
         }
     }
 
+    toRename?.let { s ->
+        TextInputDialog(
+            title = "이해관계자 이름 수정",
+            initial = s.name,
+            hint = "예: 홍길동",
+            onDismiss = { toRename = null },
+            onConfirm = { name ->
+                toRename = null
+                launch {
+                    FolderRepository.renameStakeholder(context, s.id, name)
+                    snackbar.showSnackbar("이름을 '$name' (으)로 바꾸고 폴더에 다시 적용했어요.")
+                }
+            },
+        )
+    }
+
     toDelete?.let { s ->
         AlertDialog(
             onDismissRequest = { toDelete = null },
             title = { Text("이해관계자 삭제") },
-            text = { Text("'${s.name}' 을(를) 목록에서 지울까요? 계약서와 폴더는 지워지지 않습니다.") },
+            text = { Text("'${s.name}' 을(를) 목록에서 지울까요? 폴더의 이해관계자 표시에서도 빠집니다. 계약서와 폴더는 지워지지 않습니다.") },
             confirmButton = {
-                TextButton(onClick = { toDelete = null; launch { FolderRepository.deleteStakeholder(s.id) } }) {
+                TextButton(onClick = { toDelete = null; launch { FolderRepository.deleteStakeholder(context, s.id) } }) {
                     Text("삭제", color = MaterialTheme.colorScheme.error)
                 }
             },

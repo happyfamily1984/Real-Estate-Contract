@@ -7,6 +7,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.happyfamily.contract.ui.theme.ContractTheme
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -37,6 +39,19 @@ class ScreenshotTest {
     fun homeFolders() = shot("home_folders.png") { Home(SampleData.homeState()) }
 
     @Test
+    fun homeCompact() = shot("home_compact.png") { Home(SampleData.homeState(), compact = true) }
+
+    @Test
+    fun folderContracts() = shot("folder_contracts.png") {
+        androidx.compose.foundation.lazy.LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp)) {
+            items(SampleData.gwacheon.size) { i ->
+                ContractCard(SampleData.gwacheon[i], onClick = {}, ongoing = i != 1)
+                androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.padding(6.dp))
+            }
+        }
+    }
+
+    @Test
     fun homeMerge() = shot("home_merge.png") { Home(SampleData.homeState(), selecting = setOf("f1", "f2")) }
 
     @Test
@@ -49,13 +64,13 @@ class ScreenshotTest {
             upload = null,
             snackbar = remember { SnackbarHostState() },
             onBack = {}, onScan = {}, onPickFiles = {}, onToggleSort = {}, onRename = {}, onSetStatus = {},
-            onSetStakeholder = {}, onSaveSummary = {}, onApply = {}, onCopy = {}, onExport = {}, onDelete = {},
+            onSetStakeholders = {}, onSaveSummary = {}, onApply = {}, onCopy = {}, onExport = {}, onDelete = {},
             onOpenContract = {},
         )
     }
 
     @Composable
-    private fun Home(state: HomeState, selecting: Set<String>? = null) {
+    private fun Home(state: HomeState, selecting: Set<String>? = null, compact: Boolean = false) {
         HomeContent(
             state = state,
             query = "",
@@ -67,6 +82,7 @@ class ScreenshotTest {
             snackbar = remember { SnackbarHostState() },
             onPickFiles = {}, onScan = {}, onStakeholders = {}, onSignOut = {}, onOpenFolder = {}, onOpenContract = {},
             selecting = selecting,
+            compact = compact,
         )
     }
 }

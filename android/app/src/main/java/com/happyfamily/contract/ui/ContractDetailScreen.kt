@@ -66,6 +66,7 @@ import com.happyfamily.contract.ui.theme.Brand
 import com.happyfamily.contract.data.AnalyzeWorker
 import androidx.compose.material3.OutlinedButton
 import com.happyfamily.contract.data.Contract
+import com.happyfamily.contract.data.Glance
 import com.happyfamily.contract.data.ContractAnalysis
 import com.happyfamily.contract.data.ContractRepository
 import com.happyfamily.contract.data.ContractStatus
@@ -223,7 +224,12 @@ fun ContractDetailScreen(
                         val newId = target ?: FolderRepository.createFolder(
                             name = a?.folderName?.ifBlank { null } ?: "새 계약 폴더",
                             address = a?.propertyAddress.orEmpty(),
-                            stakeholder = FolderRepository.defaultStakeholderName(),
+                            stakeholder = com.happyfamily.contract.data.Stakeholders.join(
+                                com.happyfamily.contract.data.Stakeholders.matching(
+                                    FolderRepository.allStakeholders().map { it.name },
+                                    listOfNotNull(a),
+                                ),
+                            ),
                             thumbnail = contract.thumbnail,
                         )
                         if (newId != old) {
@@ -377,8 +383,20 @@ private fun AnalysisSections(a: ContractAnalysis) {
     val ownerLabel = a.ownerLabel
     val userLabel = a.userLabel
 
-    Section("한눈에 보기") {
-        Text(a.summary, style = MaterialTheme.typography.bodyLarge)
+    // 한눈에 보기: 소재지, 계약날짜, 계약기간, 금액, 계약자만
+    Section("계약서 한눈에 보기") {
+        Glance.items(a).forEach { item -> GlanceRow(item.label, item.value) }
+    }
+
+    // 나머지는 접어 둔다.
+    var expanded by remember { mutableStateOf(false) }
+    TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
+        Text(if (expanded) "자세히 접기 ▲" else "자세히 보기 (요약·확인 필요·지급 일정·특약 등) ▼")
+    }
+    if (!expanded) return
+
+    if (a.summary.isNotBlank()) {
+        Section("요약") { Text(a.summary, style = MaterialTheme.typography.bodyLarge) }
     }
 
     if (a.cautions.isNotEmpty()) {
@@ -457,6 +475,14 @@ private fun AnalysisSections(a: ContractAnalysis) {
                 Text("${i + 1}. $term", modifier = Modifier.padding(vertical = 3.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun GlanceRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+        Text(label, modifier = Modifier.width(76.dp), color = Brand.TextSub, fontSize = 15.sp)
+        Text(highlightSummary(value), modifier = Modifier.weight(1f), color = Brand.Navy, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

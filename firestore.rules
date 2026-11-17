@@ -1,62 +1,11 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isOwner(uid) {
-      return request.auth != null && request.auth.uid == uid;
-    }
-
-    function smallBytes(field, limit) {
-      return !(field in request.resource.data)
-        || request.resource.data[field] == null
-        || (request.resource.data[field] is bytes && request.resource.data[field].size() < limit);
-    }
-
-    // 로그인한 본인의 데이터만 읽고 쓸 수 있다.
-    match /users/{uid}/contracts/{contractId} {
-      allow read, delete: if isOwner(uid);
-      allow create, update: if isOwner(uid)
-        && request.resource.data.keys().hasOnly([
-             'status', 'pageCount', 'thumbnail', 'memo', 'title', 'contractType',
-             'analysis', 'error', 'createdAt', 'updatedAt', 'analyzedAt',
-             'folderId', 'digest', 'sortDate'])
-        && request.resource.data.status in ['pending', 'processing', 'done', 'error']
-        && request.resource.data.pageCount is int
-        && request.resource.data.pageCount >= 1
-        && request.resource.data.pageCount <= 50
-        && smallBytes('thumbnail', 100000);
-
-      // 페이지 사진 (JPEG). 문서 1개 최대 1MiB.
-      match /pages/{page} {
-        allow read, delete: if isOwner(uid);
-        allow create, update: if isOwner(uid)
-          && request.resource.data.keys().hasOnly(['index', 'image'])
-          && request.resource.data.image is bytes
-          && request.resource.data.image.size() < 1000000;
-      }
-    }
-
-    // 부동산별 계약 폴더와 계약내용정리
-    match /users/{uid}/folders/{folderId} {
-      allow read, delete: if isOwner(uid);
-      allow create, update: if isOwner(uid)
-        && request.resource.data.keys().hasOnly([
-             'name', 'address', 'stakeholder', 'status', 'summaryText', 'summaryEntries',
-             'summaryEdited', 'summaryState', 'summaryError', 'summaryNote', 'summaryUpdatedAt',
-             'thumbnail', 'createdAt', 'updatedAt'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() <= 30
-        && request.resource.data.status in ['ongoing', 'done']
-        && smallBytes('thumbnail', 100000);
-    }
-
-    // 이해관계자와 그 사람 기준 전체 정리 문서
-    match /users/{uid}/stakeholders/{stakeholderId} {
-      allow read, delete: if isOwner(uid);
-      allow create, update: if isOwner(uid)
-        && request.resource.data.keys().hasOnly([
-             'name', 'isDefault', 'report', 'reportEdited', 'createdAt', 'updatedAt'])
-        && request.resource.data.name is string
-        && request.resource.data.name.size() <= 30;
+    // 로그인한 본인의 데이터(users/{본인 uid} 아래 전부)만 읽고 쓸 수 있다.
+    // 계약서, 페이지 사진, 폴더, 이해관계자, 일정 계획 메모 등이 모두 여기 들어간다.
+    // 앞으로 앱 기능이 늘어도 이 규칙은 다시 바꿀 필요가 없다.
+    match /users/{uid}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
     }
   }
 }

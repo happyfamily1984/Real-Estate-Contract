@@ -63,7 +63,10 @@ data class Folder(
     val id: String,
     val name: String,
     val address: String,
-    /** 이 폴더를 보관하는 이해관계자. 진행중/완료와 매수/매도 등은 이 사람 기준. */
+    /**
+     * 이해관계자 이름들 (", " 로 이어 저장). 등록된 이해관계자 중 계약서 당사자로 나오는 사람만 들어간다.
+     * 진행중/완료와 매수/매도 등은 이 사람들 기준.
+     */
     val stakeholder: String,
     val status: FolderStatus,
     val summaryText: String,
@@ -74,7 +77,13 @@ data class Folder(
     val summaryError: String?,
     val summaryNote: String?,
     val thumbnail: ByteArray?,
+    /** 사용자가 진행중/완료를 직접 정했는지. 정했으면 자동으로 바꾸지 않는다. */
+    val statusManual: Boolean = false,
+    /** 사용자가 이해관계자를 직접 고쳤는지. 고쳤으면 새 계약서가 들어와도 자동으로 바꾸지 않는다 (내용적용 때는 다시 맞춤). */
+    val stakeholderManual: Boolean = false,
 ) {
+    val stakeholderNames: List<String> get() = Stakeholders.split(stakeholder)
+
     fun matches(query: String): Boolean {
         if (query.isBlank()) return true
         return listOf(name, address, stakeholder, summaryText).joinToString(" ")
@@ -99,6 +108,8 @@ data class Folder(
                 summaryError = doc.getString("summaryError"),
                 summaryNote = doc.getString("summaryNote"),
                 thumbnail = doc.getBlob("thumbnail")?.toBytes(),
+                statusManual = doc.getBoolean("statusManual") ?: false,
+                stakeholderManual = doc.getBoolean("stakeholderManual") ?: false,
             )
         }
     }
@@ -121,4 +132,25 @@ data class Stakeholder(
             reportEdited = doc.getBoolean("reportEdited") ?: false,
         )
     }
+}
+
+/** 이해관계자 이름 다루기 */
+object Stakeholders {
+    fun split(joined: String): List<String> = joined.split(",").map { it.trim() }.filter { it.isNotBlank() }.distinct()
+
+    fun join(names: List<String>): String = names.map { it.trim() }.filter { it.isNotBlank() }.distinct().joinToString(", ")
+
+    private fun normalize(s: String) = s.replace(Regex("[\\s·,()]"), "")
+
+    /** 이름이 계약서 당사자 이름에 들어 있는지 (공동명의 "홍길동, 김영희" 도 찾음) */
+    fun appearsIn(name: String, partyName: String): Boolean {
+        val n = normalize(name)
+        return n.length >= 2 && normalize(partyName).contains(n)
+    }
+
+    /** 등록된 이해관계자 중 계약서 당사자(임대인·임차인·매도인·매수인 등)로 나오는 사람들. 없으면 빈 목록. */
+    fun matching(registered: List<String>, analyses: List<ContractAnalysis>): List<String> =
+        registered.filter { name ->
+            analyses.any { a -> appearsIn(name, a.lessor.name) || appearsIn(name, a.lessee.name) }
+        }
 }

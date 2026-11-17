@@ -53,13 +53,14 @@ object GeminiAnalyzer {
     """.trimIndent()
 
     private val SUMMARIZE_PROMPT = """
-        당신은 한 사람(이해관계자)의 부동산 계약 이력을 정리하는 전문가입니다.
+        당신은 부동산 계약 이력을 정리하는 전문가입니다.
         폴더별 계약서 핵심 내용을 읽고, 이해관계자 입장에서 계약 하나당 한 줄(entry)로 정리합니다.
 
         규칙:
-        - role: 이해관계자가 그 계약에서 맡은 역할. 매수(매수인·수분양자·낙찰자), 매도(매도인), 임차(임차인), 임대(임대인), 해당 없으면 기타.
+        - 이해관계자는 여러 명일 수 있습니다(가족, 공동명의 등). 그중 누구라도 그 계약의 당사자이면 그 입장으로 role 을 정합니다.
+          role: 매수(매수인·수분양자·낙찰자), 매도(매도인), 임차(임차인), 임대(임대인).
           이름은 공동명의, 띄어쓰기, 일부만 적힌 경우도 같은 사람으로 봅니다.
-        - 이해관계자가 주어지지 않으면 서류에 반복해서 나오는 사람(예: 매수한 뒤 임대한 사람)을 보관자로 추정해 inferredStakeholder 에 쓰고 그 사람 기준으로 정리합니다.
+        - 이해관계자가 "(없음)" 이거나 계약서 당사자에 이해관계자가 없으면 role 은 "기타" 로 둡니다. 다른 사람을 이해관계자로 추정하지 않습니다.
         - date: 매매·분양·전세·월세는 계약일, 경매는 취득일(잔금 납부일 등). 취득일이 추정이면 dateEstimated=true.
         - amount: 매매는 매매대금, 분양은 분양금액, 경매는 잔금 납부금액(취득금액), 전세·월세는 보증금. monthlyRent 는 월세.
         - periodStart / periodEnd: 전세·월세의 임대차 기간. 그 밖에는 "".
@@ -68,6 +69,7 @@ object GeminiAnalyzer {
         - 같은 계약에 대한 서류가 여러 장이면(예: 계약서와 영수증, 매각허가결정과 완납증명) 한 줄로 합치고, 나머지 contractId 는 note 에 "관련 서류 n건"처럼 적습니다.
         - note 는 꼭 필요한 짧은 보충만(갱신, 공동명의, 중도해지 등). 없으면 "".
         - status: 이해관계자가 그 부동산을 지금 보유하고 있거나 임차·임대 중이면 "진행중", 매도를 마쳤거나 임대차가 끝났으면 "완료".
+          이해관계자가 없으면 진행중인 계약이 하나라도 있으면 "진행중", 아니면 "완료".
         - 폴더 목록에 있는 모든 폴더에 대해 결과를 돌려줍니다. entries 는 날짜가 빠른 순서로.
     """.trimIndent()
 
@@ -143,7 +145,6 @@ object GeminiAnalyzer {
 
     private val summarySchema = AiSchema.Obj(
         mapOf(
-            "inferredStakeholder" to AiSchema.Str("기준으로 삼은 이해관계자 이름"),
             "folders" to AiSchema.Arr(
                 AiSchema.Obj(
                     mapOf(
@@ -181,13 +182,13 @@ object GeminiAnalyzer {
     }
 
     data class SummarizeInput(val folder: Folder, val digests: List<String>)
-    data class SummarizeResult(val inferredStakeholder: String, val folders: List<FolderSummary>)
+    data class SummarizeResult(val folders: List<FolderSummary>)
 
     /** 저장해 둔 핵심 텍스트만으로 폴더들을 이해관계자 기준으로 정리한다 (사진을 다시 보내지 않음). */
-    suspend fun summarize(context: Context, stakeholder: String, inputs: List<SummarizeInput>): SummarizeResult {
+    suspend fun summarize(context: Context, stakeholders: List<String>, inputs: List<SummarizeInput>): SummarizeResult {
         val body = buildString {
             appendLine("오늘: ${today()}")
-            appendLine("이해관계자: ${stakeholder.ifBlank { "(입력 안 됨 — 추정해 주세요)" }}")
+            appendLine("이해관계자: ${stakeholders.joinToString(", ").ifBlank { "(없음)" }}")
             for (input in inputs) {
                 appendLine()
                 appendLine("### 폴더 id=${input.folder.id} / 이름=${input.folder.name} / 주소=${input.folder.address}")
@@ -203,7 +204,7 @@ object GeminiAnalyzer {
                     .sortedBy { it.date.ifBlank { "9999" } },
             )
         }
-        return SummarizeResult(json.str("inferredStakeholder"), folders)
+        return SummarizeResult(folders)
     }
 
     fun friendlyMessage(e: Throwable): String = when (e) {

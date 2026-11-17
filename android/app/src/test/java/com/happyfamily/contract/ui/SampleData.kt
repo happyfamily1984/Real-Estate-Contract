@@ -61,7 +61,7 @@ object SampleData {
     )
 
     fun folder(id: String, name: String, stakeholder: String, contracts: List<Contract>): Folder {
-        val s = LocalSummarizer.summarize(id, stakeholder, contracts)
+        val s = LocalSummarizer.summarize(id, listOf(stakeholder), contracts)
         return Folder(
             id = id, name = name, address = contracts.first().analysis!!.propertyAddress, stakeholder = stakeholder,
             status = s.status, summaryText = SummaryText.lines(s.entries), summaryEntries = s.entries,

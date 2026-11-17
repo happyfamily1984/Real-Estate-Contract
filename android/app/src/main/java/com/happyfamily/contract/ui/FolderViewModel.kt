@@ -61,15 +61,23 @@ class FolderViewModel(application: Application, val folderId: String) : AndroidV
 
     fun rename(name: String) = run { if (name.isNotBlank()) FolderRepository.rename(folderId, name) }
 
-    fun setStatus(status: FolderStatus) = run { FolderRepository.setStatus(folderId, status) }
+    /** 진행중/완료 직접 정하기. null 이면 자동(계약 내용으로 판단) */
+    fun setStatus(status: FolderStatus?) = run { FolderRepository.setStatus(getApplication(), folderId, status) }
 
-    fun setStakeholder(name: String) = run {
-        FolderRepository.setStakeholder(folderId, name)
+    /** 이해관계자 직접 정하기 (여러 명 가능, 비우면 없음) */
+    fun setStakeholders(names: List<String>) = run {
+        FolderRepository.setStakeholders(folderId, names)
         if (folder.value?.summaryEdited == true) {
-            _message.value = "직접 고친 정리는 그대로 두었어요. '계약서 내용적용'을 누르면 ${name.ifBlank { "새" }} 기준으로 다시 정리합니다."
+            _message.value = "직접 고친 정리는 그대로 두었어요. '계약서 내용적용'을 누르면 바뀐 이해관계자 기준으로 다시 정리합니다."
         } else {
             SummaryWorker.enqueue(getApplication(), folderId, force = false)
         }
+    }
+
+    /** 앞뒷장 등으로 나뉜 계약서들을 고른 순서대로 한 계약서로 합치고 다시 분석 */
+    fun mergeContracts(ordered: List<Contract>) = run {
+        ContractRepository.mergeContracts(getApplication(), ordered)
+        _message.value = "계약서 ${ordered.size}건을 한 계약서로 합쳤어요. 합친 페이지로 다시 분석합니다."
     }
 
     fun saveSummary(text: String) = run { FolderRepository.saveSummaryText(folderId, text) }

@@ -101,16 +101,50 @@ object FolderRepository {
 
     suspend fun rename(id: String, name: String) = update(id, mapOf("name" to name.trim().take(30)))
 
-    suspend fun setStatus(id: String, status: FolderStatus) = update(id, mapOf("status" to status.value))
+    /** 진행중/완료를 직접 정한다. null 이면 "자동"(계약 내용으로 판단)으로 되돌린다. */
+    suspend fun setStatus(context: Context, id: String, status: FolderStatus?) {
+        if (status == null) {
+            update(id, mapOf("statusManual" to false))
+            SummaryWorker.enqueue(context, id, force = false)
+        } else {
+            update(id, mapOf("status" to status.value, "statusManual" to true))
+        }
+    }
 
     /** 사용자가 직접 고친 정리 글 저장. 이후 새 계약서가 들어와도 자동으로 덮어쓰지 않는다. */
     suspend fun saveSummaryText(id: String, text: String) =
         update(id, mapOf("summaryText" to text, "summaryEdited" to true))
 
-    suspend fun setStakeholder(id: String, name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isNotBlank()) ensureStakeholder(trimmed)
-        update(id, mapOf("stakeholder" to trimmed))
+    /** 폴더의 이해관계자를 직접 정한다 (여러 명 가능). 새 이름은 이해관계자 목록에도 추가한다. */
+    suspend fun setStakeholders(id: String, names: List<String>) {
+        names.forEach { ensureStakeholder(it.trim()) }
+        update(id, mapOf("stakeholder" to Stakeholders.join(names), "stakeholderManual" to true))
+    }
+
+    /** 등록된 이해관계자 중 이 폴더 계약서의 당사자로 나오는 사람들 */
+    private suspend fun matchingStakeholders(folderId: String, registered: List<String>? = null): List<String> {
+        val names = registered ?: allStakeholders().map { it.name }
+        val analyses = ContractRepository.contractsInFolder(folderId).mapNotNull { it.first.analysis }
+        return Stakeholders.matching(names, analyses)
+    }
+
+    /**
+     * 모든 폴더의 이해관계자를 등록된 이름 기준으로 다시 맞춘다 (이해관계자를 추가·수정·삭제했을 때).
+     * [includeManual] 이 false 면 사용자가 직접 고친 폴더는 그대로 둔다. 바뀐 폴더는 정리를 다시 만든다.
+     */
+    suspend fun reassignAllStakeholders(context: Context, includeManual: Boolean = false): Int {
+        val registered = allStakeholders().map { it.name }
+        var changed = 0
+        for (f in allFolders()) {
+            if (f.stakeholderManual && !includeManual) continue
+            val names = Stakeholders.join(matchingStakeholders(f.id, registered))
+            if (names != f.stakeholder || (includeManual && f.stakeholderManual)) {
+                update(f.id, mapOf("stakeholder" to names, "stakeholderManual" to false))
+                SummaryWorker.enqueue(context, f.id, force = false)
+                changed++
+            }
+        }
+        return changed
     }
 
     /** 폴더와 그 안의 모든 계약서를 지운다. */
@@ -148,16 +182,17 @@ object FolderRepository {
 
     /**
      * 폴더 안에서 고른 계약서들을 새 폴더로 분리한다. 새 폴더 id 를 돌려준다.
-     * 이해관계자는 원래 폴더 것을 그대로 쓰고, 두 폴더 모두 정리를 다시 만들도록 예약한다.
+     * 이해관계자는 옮긴 계약서의 당사자 중 등록된 사람으로 정하고, 두 폴더 모두 정리를 다시 만들도록 예약한다.
      */
     suspend fun splitContracts(context: Context, sourceId: String, contracts: List<Contract>, name: String): String {
         require(contracts.isNotEmpty()) { "분리할 계약서를 골라 주세요." }
-        val source = get(sourceId)
         val first = contracts.firstOrNull { it.analysis != null } ?: contracts.first()
         val newId = createFolder(
             name = name.ifBlank { first.analysis?.folderName.orEmpty() }.ifBlank { "새 계약 폴더" },
             address = first.analysis?.propertyAddress.orEmpty(),
-            stakeholder = source?.stakeholder.orEmpty(),
+            stakeholder = Stakeholders.join(
+                Stakeholders.matching(allStakeholders().map { it.name }, contracts.mapNotNull { it.analysis }),
+            ),
             thumbnail = first.thumbnail,
         )
         ContractRepository.setFolderAll(contracts.map { it.id }, newId)
@@ -171,7 +206,7 @@ object FolderRepository {
     suspend fun allStakeholders(): List<Stakeholder> =
         stakeholders().get().await().documents.map(Stakeholder::from)
 
-    /** 이름으로 찾고, 없으면 만든다. 첫 이해관계자는 기본(본인)으로 정한다. */
+    /** 이름으로 찾고, 없으면 만든다. */
     suspend fun ensureStakeholder(name: String): String {
         val all = allStakeholders()
         all.firstOrNull { it.name == name }?.let { return it.id }
@@ -189,9 +224,6 @@ object FolderRepository {
         return doc.id
     }
 
-    suspend fun defaultStakeholderName(): String =
-        allStakeholders().let { list -> (list.firstOrNull { it.isDefault } ?: list.firstOrNull())?.name.orEmpty() }
-
     suspend fun setDefaultStakeholder(id: String) {
         val batch = db.batch()
         allStakeholders().forEach { s ->
@@ -200,8 +232,30 @@ object FolderRepository {
         batch.commit().await()
     }
 
-    suspend fun deleteStakeholder(id: String) {
+    suspend fun deleteStakeholder(context: Context, id: String) {
+        val s = stakeholders().document(id).get().await().let(Stakeholder::from)
         stakeholders().document(id).delete().await()
+        // 직접 지정한 폴더에서도 이 이름을 뺀다.
+        for (f in allFolders()) {
+            if (s.name in f.stakeholderNames) {
+                update(f.id, mapOf("stakeholder" to Stakeholders.join(f.stakeholderNames - s.name)))
+            }
+        }
+        reassignAllStakeholders(context)
+    }
+
+    /** 이해관계자 이름 바꾸기. 폴더에 적힌 이름도 함께 바꾸고 다시 맞춘다. */
+    suspend fun renameStakeholder(context: Context, id: String, newName: String) {
+        val name = newName.trim().take(30)
+        require(name.isNotBlank()) { "이름을 입력해 주세요." }
+        val old = stakeholders().document(id).get().await().let(Stakeholder::from)
+        stakeholders().document(id).update(mapOf("name" to name, "updatedAt" to FieldValue.serverTimestamp())).await()
+        for (f in allFolders()) {
+            if (old.name in f.stakeholderNames) {
+                update(f.id, mapOf("stakeholder" to Stakeholders.join(f.stakeholderNames.map { if (it == old.name) name else it })))
+            }
+        }
+        reassignAllStakeholders(context)
     }
 
     suspend fun saveReport(id: String, text: String, edited: Boolean) {
@@ -228,7 +282,7 @@ object FolderRepository {
         val folderId = (byAi ?: byAddress)?.id ?: createFolder(
             name = a?.folderName?.ifBlank { null } ?: a?.propertyAddress?.split(" ")?.take(3)?.joinToString(" ").orEmpty(),
             address = a?.propertyAddress.orEmpty(),
-            stakeholder = defaultStakeholderName(),
+            stakeholder = Stakeholders.join(Stakeholders.matching(allStakeholders().map { it.name }, listOfNotNull(a))),
             thumbnail = contract.thumbnail,
         )
         ContractRepository.setFolder(contract.id, folderId)
@@ -279,37 +333,40 @@ object FolderRepository {
                 )
                 return
             }
-            var stakeholder = folder.stakeholder
+            // 이해관계자: 등록된 이름 중 계약서 당사자로 나오는 사람만. 직접 고친 폴더는 내용적용(force) 때만 다시 맞춘다.
+            val names = if (folder.stakeholderManual && !force) {
+                folder.stakeholderNames
+            } else {
+                Stakeholders.matching(allStakeholders().map { it.name }, contracts.mapNotNull { it.first.analysis })
+            }
             var note: String? = null
             val summary = try {
                 val result = GeminiAnalyzer.summarize(
-                    context, stakeholder,
+                    context, names,
                     listOf(GeminiAnalyzer.SummarizeInput(folder, contracts.map { it.second })),
                 )
-                if (stakeholder.isBlank() && result.inferredStakeholder.isNotBlank()) {
-                    stakeholder = result.inferredStakeholder.trim()
-                }
                 result.folders.firstOrNull { it.folderId == folderId } ?: result.folders.firstOrNull()
                     ?: error("AI 정리 결과가 비어 있습니다.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 note = "AI 대신 기본 규칙으로 정리했습니다. ${GeminiAnalyzer.friendlyMessage(e)}"
-                LocalSummarizer.summarize(folderId, stakeholder, contracts.map { it.first })
+                LocalSummarizer.summarize(folderId, names, contracts.map { it.first })
             }
-            if (stakeholder != folder.stakeholder && stakeholder.isNotBlank()) ensureStakeholder(stakeholder)
             update(
                 folderId,
-                mapOf(
-                    "summaryEntries" to summary.entries.map { it.toMap() },
-                    "summaryText" to SummaryText.lines(summary.entries),
-                    "summaryEdited" to false,
-                    "status" to summary.status.value,
-                    "stakeholder" to stakeholder,
-                    "summaryState" to "idle",
-                    "summaryNote" to (note ?: FieldValue.delete()),
-                    "summaryUpdatedAt" to FieldValue.serverTimestamp(),
-                ),
+                buildMap {
+                    put("summaryEntries", summary.entries.map { it.toMap() })
+                    put("summaryText", SummaryText.lines(summary.entries))
+                    put("summaryEdited", false)
+                    // 직접 정한 진행중/완료는 그대로 둔다.
+                    if (!folder.statusManual) put("status", summary.status.value)
+                    put("stakeholder", Stakeholders.join(names))
+                    if (force) put("stakeholderManual", false)
+                    put("summaryState", "idle")
+                    put("summaryNote", note ?: FieldValue.delete())
+                    put("summaryUpdatedAt", FieldValue.serverTimestamp())
+                },
             )
         } catch (e: CancellationException) {
             withContext(NonCancellable) { runCatching { update(folderId, mapOf("summaryState" to "idle")) } }
@@ -325,9 +382,9 @@ object FolderRepository {
     private suspend fun foldersFor(name: String): List<Folder> {
         val all = allFolders()
         val mentioned = ContractRepository.allContracts()
-            .filter { c -> c.analysis?.let { it.lessor.name.contains(name) || it.lessee.name.contains(name) } == true }
+            .filter { c -> c.analysis?.let { Stakeholders.appearsIn(name, it.lessor.name) || Stakeholders.appearsIn(name, it.lessee.name) } == true }
             .mapNotNull { it.folderId }.toSet()
-        return all.filter { it.stakeholder == name || it.id in mentioned }
+        return all.filter { name in it.stakeholderNames || it.id in mentioned }
     }
 
     /**
@@ -338,7 +395,7 @@ object FolderRepository {
         val name = stakeholder.name
         val folders = foldersFor(name)
         if (folders.isEmpty()) {
-            val text = "$name 계약내용정리\n\n이 이해관계자와 관련된 계약서가 없습니다.\n폴더에서 이해관계자를 \"$name\" 으로 지정해 주세요."
+            val text = "$name 계약내용정리\n\n계약서 당사자(임대인·임차인 등)로 \"$name\" 이 나오는 계약서가 없습니다."
             saveReport(stakeholder.id, text, edited = false)
             return text to null
         }
@@ -350,7 +407,7 @@ object FolderRepository {
         var note: String? = null
         val summaries: Map<String, FolderSummary> = try {
             GeminiAnalyzer.summarize(
-                context, name,
+                context, listOf(name),
                 inputs.map { (f, cs) -> GeminiAnalyzer.SummarizeInput(f, cs.map { it.second }) },
             ).folders.associateBy { it.folderId }
         } catch (e: CancellationException) {
@@ -360,7 +417,7 @@ object FolderRepository {
             emptyMap()
         }
         val groups = inputs.map { (f, cs) ->
-            f to (summaries[f.id] ?: LocalSummarizer.summarize(f.id, name, cs.map { it.first }))
+            f to (summaries[f.id] ?: LocalSummarizer.summarize(f.id, listOf(name), cs.map { it.first }))
         }
         val text = SummaryText.stakeholderReport(name, groups)
         saveReport(stakeholder.id, text, edited = false)

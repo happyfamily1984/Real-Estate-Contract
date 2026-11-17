@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.happyfamily.contract.data.AnalyzeWorker
 import com.happyfamily.contract.data.UpgradeWorker
+import com.happyfamily.contract.data.ReminderWorker
 import com.happyfamily.contract.data.Contract
 import com.happyfamily.contract.data.ContractRepository
 import com.happyfamily.contract.data.Folder
@@ -35,6 +36,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val query = MutableStateFlow("")
 
+    private val prefs = application.getSharedPreferences("home", android.content.Context.MODE_PRIVATE)
+
+    /** 목록으로 보기 (사진 없이 제목만 촘촘하게) */
+    val compact = MutableStateFlow(prefs.getBoolean("compact", false))
+
+    fun setCompact(on: Boolean) {
+        compact.value = on
+        prefs.edit().putBoolean("compact", on).apply()
+    }
+
     /** null 이면 전체, 아니면 그 이해관계자의 폴더만 */
     val stakeholderFilter = MutableStateFlow<String?>(null)
 
@@ -52,7 +63,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     ) { folders, contracts, stakeholders, (q, who) ->
         val counts = contracts.mapNotNull { it.folderId }.groupingBy { it }.eachCount()
         val shown = folders
-            .filter { who == null || it.stakeholder == who }
+            .filter { who == null || who in it.stakeholderNames }
             .filter { f -> f.matches(q) || contracts.any { it.folderId == f.id && it.matches(q) } }
             .sortedBy { it.name }
         HomeState(
@@ -95,6 +106,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { runCatching { AnalyzeWorker.recoverStuck(getApplication()) } }
         // AI 를 못 써서 기본 분석으로 끝난 계약서를 AI 를 쓸 수 있게 되면 다시 분석한다.
         UpgradeWorker.schedule(getApplication())
+        // 계약 만기 등 일정 알림 (하루 한 번 확인)
+        ReminderWorker.schedule(getApplication())
         viewModelScope.launch { runCatching { UpgradeWorker.upgradeNow(getApplication()) } }
     }
 }

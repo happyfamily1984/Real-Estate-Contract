@@ -33,7 +33,11 @@ fun AppNavigation() {
                     onOpenContract = { id -> nav.navigate("detail/$id") },
                     onOpenStakeholders = { nav.navigate("stakeholders") },
                     onOpenAiSettings = { nav.navigate("ai-settings") },
+                    onOpenSchedule = { nav.navigate("schedule") },
                 )
+            }
+            composable("schedule") {
+                ScheduleScreen(onBack = { nav.popBackStack() }, onOpenFolder = { id -> nav.navigate("folder/$id") })
             }
             composable("ai-settings") { AiSettingsScreen(onBack = { nav.popBackStack() }) }
             composable("folder/{id}", arguments = idArg) { entry ->

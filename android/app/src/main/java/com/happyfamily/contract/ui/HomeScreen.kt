@@ -33,6 +33,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.EventNote
+import androidx.compose.material.icons.outlined.ViewAgenda
+import androidx.compose.material.icons.automirrored.outlined.ViewList
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material3.AlertDialog
@@ -77,6 +80,7 @@ fun HomeScreen(
     onOpenContract: (String) -> Unit,
     onOpenStakeholders: () -> Unit,
     onOpenAiSettings: () -> Unit = {},
+    onOpenSchedule: () -> Unit = {},
     viewModel: HomeViewModel = viewModel(),
     importVm: ImportViewModel = viewModel(),
 ) {
@@ -86,6 +90,7 @@ fun HomeScreen(
     val query by viewModel.query.collectAsStateWithLifecycle()
     val filter by viewModel.stakeholderFilter.collectAsStateWithLifecycle()
     val loadError by viewModel.loadError.collectAsStateWithLifecycle()
+    val compact by viewModel.compact.collectAsStateWithLifecycle()
     val upload by importVm.upload.collectAsStateWithLifecycle()
     val message by importVm.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
@@ -116,6 +121,9 @@ fun HomeScreen(
         onScan = importer.scan,
         onStakeholders = onOpenStakeholders,
         onAiSettings = onOpenAiSettings,
+        onSchedule = onOpenSchedule,
+        compact = compact,
+        onToggleCompact = { viewModel.setCompact(!compact) },
         onSignOut = { confirmSignOut = true },
         onOpenFolder = onOpenFolder,
         onOpenContract = onOpenContract,
@@ -178,6 +186,9 @@ internal fun HomeContent(
     onScan: () -> Unit,
     onStakeholders: () -> Unit,
     onAiSettings: () -> Unit = {},
+    onSchedule: () -> Unit = {},
+    compact: Boolean = false,
+    onToggleCompact: () -> Unit = {},
     onSignOut: () -> Unit,
     onOpenFolder: (String) -> Unit,
     onOpenContract: (String) -> Unit,
@@ -216,6 +227,7 @@ internal fun HomeContent(
                         fontWeight = FontWeight.ExtraBold,
                         modifier = Modifier.weight(1f),
                     )
+                    HeaderIcon(Icons.Outlined.EventNote, "향후 일정", onClick = onSchedule)
                     HeaderIcon(Icons.Outlined.Groups, "이해관계자", onClick = onStakeholders)
                     HeaderIcon(Icons.Outlined.Settings, "AI 설정", onClick = onAiSettings)
                     HeaderIcon(Icons.AutoMirrored.Outlined.Logout, "로그아웃", onClick = onSignOut)
@@ -285,8 +297,21 @@ internal fun HomeContent(
                     } else {
                         LazyColumn(
                             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 112.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 12.dp),
                         ) {
+                            item(key = "view-toggle") {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                    TextButton(onClick = onToggleCompact) {
+                                        Icon(
+                                            if (compact) Icons.Outlined.ViewAgenda else Icons.AutoMirrored.Outlined.ViewList,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(if (compact) "사진과 함께 보기" else "목록으로 보기")
+                                    }
+                                }
+                            }
                             if (state.unfiled.isNotEmpty()) {
                                 sectionHeader("분석 중인 계약서", state.unfiled.size, actionLabel = "분석 다시 시작", onAction = onRestartAnalysis)
                                 items(state.unfiled, key = { "c-" + it.id }) { c ->
@@ -298,11 +323,11 @@ internal fun HomeContent(
                             }
                             val canMerge = selecting == null && state.ongoing.size + state.done.size >= 2
                             folderSection(
-                                "진행중", state.ongoing, state.contractCounts, selecting, folderClick, onStartSelect,
+                                "진행중", state.ongoing, state.contractCounts, selecting, folderClick, onStartSelect, compact,
                                 actionLabel = if (canMerge) "폴더 합치기" else null,
                             )
                             folderSection(
-                                "완료", state.done, state.contractCounts, selecting, folderClick, onStartSelect,
+                                "완료", state.done, state.contractCounts, selecting, folderClick, onStartSelect, compact,
                                 actionLabel = if (canMerge && state.ongoing.isEmpty()) "폴더 합치기" else null,
                             )
                         }
@@ -401,11 +426,22 @@ private fun LazyListScope.folderSection(
     selecting: Set<String>?,
     onClick: (Folder) -> Unit,
     onStartSelect: (String?) -> Unit,
+    compact: Boolean,
     actionLabel: String? = null,
 ) {
     if (folders.isEmpty()) return
     sectionHeader(title, folders.size, actionLabel = actionLabel, onAction = { onStartSelect(null) })
     items(folders, key = { "f-" + it.id }) { f ->
+        if (compact) {
+            FolderRow(
+                folder = f,
+                contractCount = counts[f.id] ?: 0,
+                onClick = { onClick(f) },
+                onLongClick = { if (selecting == null) onStartSelect(f.id) else onClick(f) },
+                selected = selecting?.contains(f.id),
+            )
+            return@items
+        }
         FolderCard(
             folder = f,
             contractCount = counts[f.id] ?: 0,

@@ -56,6 +56,8 @@ import com.happyfamily.contract.data.Contract
 import com.happyfamily.contract.data.ContractAnalysis
 import com.happyfamily.contract.data.ContractStatus
 import com.happyfamily.contract.data.Folder
+import com.happyfamily.contract.data.Glance
+import com.happyfamily.contract.data.formatShortDate
 import com.happyfamily.contract.data.FolderStatus
 import com.happyfamily.contract.data.SummaryText
 import com.happyfamily.contract.ui.theme.Brand
@@ -186,6 +188,8 @@ fun Badge(text: String, color: Color, filled: Boolean = false) {
         color = if (filled) Color.White else color,
         fontSize = 12.sp,
         fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        softWrap = false,
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .background(if (filled) color else color.copy(alpha = 0.12f))
@@ -254,10 +258,43 @@ fun FolderCard(
                 Spacer(Modifier.height(2.dp))
                 val meta = listOfNotNull(
                     "계약서 ${contractCount}건",
-                    folder.stakeholder.takeIf { it.isNotBlank() }?.let { "이해관계자 $it" },
+                    folder.stakeholderNames.takeIf { it.isNotEmpty() }?.let { "이해관계자 ${it.joinToString(", ")}" },
                 )
                 Text(meta.joinToString(" · "), color = Brand.TextSub, fontSize = 12.sp)
             }
+        }
+    }
+}
+
+/** 목록으로 보기: 사진 없이 한 줄로 촘촘하게 */
+@Composable
+fun FolderRow(
+    folder: Folder,
+    contractCount: Int,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    selected: Boolean? = null,
+) {
+    SelectableCard(onClick, onLongClick, selected, compact = true) {
+        Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            SelectCheck(selected)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    folder.name,
+                    color = Brand.Navy,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val meta = listOfNotNull(
+                    folder.stakeholderNames.takeIf { it.isNotEmpty() }?.joinToString(", "),
+                    "계약서 ${contractCount}건",
+                )
+                Text(meta.joinToString(" · "), color = Brand.TextSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.width(8.dp))
+            StatusBadge(folder.status)
         }
     }
 }
@@ -285,7 +322,7 @@ fun ContractCard(
                     }
                     val date = a?.representativeDate?.takeIf { it.isNotBlank() }
                     Text(
-                        date?.let { formatDate(it) } ?: formatDate(contract.createdAt),
+                        date?.let { formatShortDate(it) } ?: formatDate(contract.createdAt),
                         color = Brand.TextSub,
                         fontSize = 13.sp,
                     )
@@ -295,7 +332,7 @@ fun ContractCard(
                     }
                     if (ongoing) {
                         Spacer(Modifier.width(8.dp))
-                        Badge(SummaryText.ONGOING_MARK, Brand.Blue)
+                        Badge("진행중", Brand.Blue)
                     }
                     if (a?.isLocal == true) {
                         Spacer(Modifier.width(8.dp))
@@ -338,8 +375,18 @@ fun ContractCard(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    ContractStatus.DONE -> a?.let {
-                        Text(keyAmountText(it), color = Brand.Blue, style = MaterialTheme.typography.bodyMedium)
+                    ContractStatus.DONE -> a?.let { an ->
+                        // 계약기간, 금액, 계약자
+                        if (an.leaseStart.isNotBlank() || an.leaseEnd.isNotBlank()) {
+                            Text(
+                                "기간 ${formatShortDate(an.leaseStart)} ~ ${formatShortDate(an.leaseEnd)}",
+                                color = Brand.Navy,
+                                fontSize = 13.sp,
+                            )
+                        }
+                        val money = Glance.amounts(an).joinToString(" · ") { (l, v) -> "$l $v" }
+                        if (money.isNotBlank()) Text(money, color = Brand.Blue, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Glance.parties(an)?.let { Text(it, color = Brand.TextSub, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                     }
                 }
             }
@@ -354,9 +401,10 @@ private fun SelectableCard(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?,
     selected: Boolean?,
+    compact: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(if (compact) 14.dp else 20.dp)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -364,7 +412,7 @@ private fun SelectableCard(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = shape,
         colors = CardDefaults.cardColors(containerColor = if (selected == true) Brand.CardTint else Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (compact) 1.dp else 2.dp),
         border = if (selected == true) BorderStroke(2.dp, Brand.Blue) else null,
     ) { content() }
 }

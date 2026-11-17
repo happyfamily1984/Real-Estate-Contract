@@ -236,6 +236,39 @@ object ContractRepository {
         }
     }
 
+    /**
+     * 한 계약서가 파일 여러 개로 나뉘어 올라간 경우(앞뒷장 등) 하나로 합친다.
+     * [ordered] 순서대로 페이지를 이어 붙여 첫 계약서에 모으고, 나머지 계약서는 지운 뒤 다시 분석한다.
+     */
+    suspend fun mergeContracts(context: Context, ordered: List<Contract>): String {
+        require(ordered.size >= 2) { "합칠 계약서를 2개 이상 골라 주세요." }
+        val total = ordered.sumOf { it.pageCount }
+        require(total <= MAX_PAGES) { "합치면 ${total}페이지라서 최대 ${MAX_PAGES}페이지를 넘습니다." }
+        val uid = uid()
+        val target = ordered.first()
+        var index = target.pageCount
+        for (other in ordered.drop(1)) {
+            for (i in 0 until other.pageCount) {
+                val bytes = pageImage(other.id, i)
+                pages(uid, target.id).document("$index")
+                    .set(mapOf("index" to index, "image" to Blob.fromBytes(bytes)))
+                    .await()
+                index++
+            }
+        }
+        contracts(uid).document(target.id).update(
+            mapOf(
+                "pageCount" to index,
+                "status" to "pending",
+                "error" to FieldValue.delete(),
+                "updatedAt" to FieldValue.serverTimestamp(),
+            ),
+        ).await()
+        ordered.drop(1).forEach { delete(it) }
+        AnalyzeWorker.enqueue(context, target.id)
+        return target.id
+    }
+
     suspend fun get(id: String): Contract? =
         contracts(uid()).document(id).get().await().takeIf { it.exists() }?.let(Contract::from)
 

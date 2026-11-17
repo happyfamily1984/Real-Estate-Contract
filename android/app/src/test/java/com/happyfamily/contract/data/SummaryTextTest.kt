@@ -32,7 +32,7 @@ class SummaryTextTest {
     @Test
     fun `이해관계자 기준 진행중과 완료`() {
         // 과천: 매수 후 아직 보유, 월세 임대 중 → 진행중
-        val g = LocalSummarizer.summarize("f1", "홍길동", SampleData.gwacheon)
+        val g = LocalSummarizer.summarize("f1", listOf("홍길동"), SampleData.gwacheon)
         assertEquals(FolderStatus.ONGOING, g.status)
         assertEquals(listOf("매수", "임대", "임대"), g.entries.map { it.role })
         assertTrue(g.entries[0].ongoing) // 아직 팔지 않음
@@ -40,7 +40,7 @@ class SummaryTextTest {
         assertTrue(g.entries[2].ongoing) // 월세 기간 중
 
         // 목동: 경매로 취득 후 매도 → 완료, 경매는 잔금 납부금액·취득일(예상)
-        val m = LocalSummarizer.summarize("f2", "홍길동", SampleData.mokdong)
+        val m = LocalSummarizer.summarize("f2", listOf("홍길동"), SampleData.mokdong)
         assertEquals(FolderStatus.DONE, m.status)
         assertEquals("2016-10-05", m.entries[0].date)
         assertTrue(m.entries[0].dateEstimated)
@@ -51,7 +51,7 @@ class SummaryTextTest {
     @Test
     fun `분양은 분양금액이 매수 취득금액`() {
         val a = SampleData.analysis("분양", "2020-06-01", "OO건설", "홍길동", sale = 700_000_000, acqAmount = 700_000_000)
-        val s = LocalSummarizer.summarize("f3", "홍길동", listOf(SampleData.contract("b1", a, "f3")))
+        val s = LocalSummarizer.summarize("f3", listOf("홍길동"), listOf(SampleData.contract("b1", a, "f3")))
         assertEquals("20년 06월 01일 분양계약 매수 금액 7억원 · 현재 진행중", SummaryText.line(s.entries.single()))
     }
 }
