@@ -49,6 +49,16 @@ class FolderViewModel(application: Application, val folderId: String) : AndroidV
         .catch { emit(emptyList()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    val allFolders: StateFlow<List<Folder>> = FolderRepository.foldersFlow()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 고른 계약서들을 다른 폴더(또는 새 폴더)로 옮기기 */
+    fun moveContracts(contracts: List<Contract>, target: String?, newName: String) = run {
+        val (_, name) = FolderRepository.moveContracts(getApplication(), contracts, target, newName)
+        _message.value = "계약서 ${contracts.size}건을 '$name' 폴더로 옮겼어요."
+    }
+
     private fun run(block: suspend () -> Unit) {
         viewModelScope.launch {
             try {

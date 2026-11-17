@@ -92,6 +92,7 @@ fun FolderScreen(
     val folder by vm.folder.collectAsStateWithLifecycle()
     val contracts by vm.contracts.collectAsStateWithLifecycle()
     val stakeholders by vm.stakeholders.collectAsStateWithLifecycle()
+    val allFolders by vm.allFolders.collectAsStateWithLifecycle()
     val newestFirst by vm.newestFirst.collectAsStateWithLifecycle()
     val deleted by vm.deleted.collectAsStateWithLifecycle()
     val upload by importVm.upload.collectAsStateWithLifecycle()
@@ -131,6 +132,8 @@ fun FolderScreen(
         onOpenContract = onOpenContract,
         onSplit = vm::split,
         onMergeContracts = vm::mergeContracts,
+        allFolders = allFolders,
+        onMoveContracts = vm::moveContracts,
     )
 }
 
@@ -158,6 +161,8 @@ internal fun FolderContent(
     onOpenContract: (String) -> Unit,
     onSplit: (List<Contract>, String) -> Unit = { _, _ -> },
     onMergeContracts: (List<Contract>) -> Unit = {},
+    allFolders: List<Folder> = emptyList(),
+    onMoveContracts: (List<Contract>, String?, String) -> Unit = { _, _, _ -> },
 ) {
     var renaming by remember { mutableStateOf(false) }
     /** null 이면 보통 화면, 아니면 분리하려고 고른 계약서 id 들 */
@@ -189,12 +194,10 @@ internal fun FolderContent(
         },
         bottomBar = {
             selecting?.let { sel ->
-                val all = sel.size == contracts.size
-                val canSplit = sel.isNotEmpty() && !all
                 val canMerge = sel.size >= 2
                 Column(Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding().padding(16.dp)) {
                     Text(
-                        "같은 계약서의 앞뒷장이면 '합치기'(고른 순서대로 페이지를 붙임), 다른 부동산이면 '분리'를 누르세요.",
+                        "다른 폴더(또는 새 폴더)로 보내려면 '옮기기', 같은 계약서의 앞뒷장이면 '합치기'(고른 순서대로 페이지를 붙임)를 누르세요.",
                         color = Brand.TextSub,
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
@@ -203,12 +206,12 @@ internal fun FolderContent(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         WhitePillButton(text = "취소", icon = Icons.Outlined.Close, onClick = { selecting = null }, height = 50.dp)
                         WhitePillButton(
-                            text = "분리",
+                            text = "옮기기",
                             icon = Icons.AutoMirrored.Outlined.CallSplit,
                             onClick = { splitting = true },
-                            enabled = canSplit,
+                            enabled = sel.isNotEmpty(),
                             height = 50.dp,
-                            modifier = Modifier.alpha(if (canSplit) 1f else 0.4f),
+                            modifier = Modifier.alpha(if (sel.isNotEmpty()) 1f else 0.4f),
                         )
                         GradientPillButton(
                             text = "합치기 (${sel.size})",
@@ -290,8 +293,8 @@ internal fun FolderContent(
                     Spacer(Modifier.width(6.dp))
                     Text("${contracts.size}", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
-                    if (selecting == null && contracts.size >= 2) {
-                        TextButton(onClick = { selecting = emptySet() }) { Text("골라서 합치기·분리") }
+                    if (selecting == null && contracts.isNotEmpty()) {
+                        TextButton(onClick = { selecting = emptySet() }) { Text("골라서 옮기기·합치기") }
                     }
                     TextButton(onClick = onToggleSort) {
                         Icon(Icons.Outlined.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -341,15 +344,17 @@ internal fun FolderContent(
     }
     if (folder != null && splitting) {
         val chosen = contracts.filter { it.id in selecting.orEmpty() }
-        TextInputDialog(
-            title = "새 폴더로 분리 (${chosen.size}건)",
-            initial = chosen.firstNotNullOfOrNull { it.analysis?.folderName?.takeIf { n -> n.isNotBlank() } } ?: "",
-            hint = "새 폴더 이름 (예: 목동 건영)",
+        FolderPickerDialog(
+            title = "${chosen.size}건을 어느 폴더로 옮길까요?",
+            folders = allFolders,
+            currentFolderId = folder.id,
+            suggestedNewName = chosen.firstNotNullOfOrNull { it.analysis?.folderName?.takeIf { n -> n.isNotBlank() && n != folder.name } }.orEmpty(),
             onDismiss = { splitting = false },
-            onConfirm = { name ->
+            onPick = { target, newName ->
                 splitting = false
+                if (target == folder.id) return@FolderPickerDialog
                 selecting = null
-                onSplit(chosen, name)
+                onMoveContracts(chosen, target, newName)
             },
         )
     }

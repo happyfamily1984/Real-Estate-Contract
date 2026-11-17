@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -186,9 +188,9 @@ fun InboxScreen(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     OutlinedButton(onClick = { vm.confirm(chosen) }, modifier = Modifier.weight(1f)) {
-                        Text("제안대로 넣기 (${chosen.count { it.folderId != null || it.analysis != null }})")
+                        Text("고른 ${chosen.size}건 제안대로")
                     }
-                    Button(onClick = { moving = chosen }, modifier = Modifier.weight(1f)) { Text("다른 폴더로 (${chosen.size})") }
+                    Button(onClick = { moving = chosen }, modifier = Modifier.weight(1f)) { Text("고른 ${chosen.size}건 옮기기") }
                 }
             }
         },
@@ -207,7 +209,7 @@ fun InboxScreen(
             ) {
                 item {
                     Text(
-                        "AI 가 같은 부동산 폴더를 제안해 두었어요. 맞으면 '제안 폴더로 넣기', 다르면 '다른 폴더로'를 누르세요. 넣은 계약서는 목록에서 사라집니다. 사진을 누르면 크게 볼 수 있어요.",
+                        "AI 가 같은 부동산 폴더를 제안해 두었어요. 맞으면 '제안 폴더로 넣기', 다르면 '다른 폴더로'를 누르세요. 여러 개는 길게 눌러 고른 뒤 아래 버튼으로 한 번에 옮길 수 있어요. 넣은 계약서는 목록에서 사라지고, 사진을 누르면 크게 볼 수 있어요.",
                         color = Brand.TextSub,
                         fontSize = 13.sp,
                         lineHeight = 19.sp,
@@ -235,6 +237,7 @@ fun InboxScreen(
                         onOpen = { onOpenContract(c.id) },
                         onConfirm = { vm.confirm(listOf(c)) },
                         onMove = { moving = listOf(c) },
+                        selecting = selected.isNotEmpty(),
                     )
                 }
             }
@@ -257,6 +260,7 @@ fun InboxScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun InboxCard(
     contract: Contract,
@@ -267,9 +271,14 @@ internal fun InboxCard(
     onOpen: () -> Unit,
     onConfirm: () -> Unit,
     onMove: () -> Unit,
+    selecting: Boolean = false,
 ) {
     Card(
-        Modifier.fillMaxWidth(),
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            // 길게 누르면 선택, 선택 중에는 누르기만 해도 선택/해제
+            .combinedClickable(onClick = { if (selecting) onToggle() else onOpen() }, onLongClick = onToggle),
         shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = if (selected) Brand.CardTint else Color.White),
         border = if (selected) BorderStroke(2.dp, Brand.Blue) else null,
@@ -302,7 +311,7 @@ internal fun InboxCard(
                     )
                 }
                 Spacer(Modifier.width(10.dp))
-                Column(Modifier.weight(1f).clickable(onClick = onOpen)) {
+                Column(Modifier.weight(1f)) {
                     val a = contract.analysis
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (contract.contractType.isNotBlank()) {
@@ -345,7 +354,8 @@ internal fun InboxCard(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            // 여러 개를 고르는 중에는 카드 버튼을 숨기고 아래 '고른 n건' 버튼으로 한꺼번에 처리한다.
+            if (!selecting) Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = onConfirm, enabled = suggested != null, modifier = Modifier.weight(1f)) { Text("제안 폴더로 넣기") }
                 OutlinedButton(onClick = onMove, modifier = Modifier.weight(1f)) { Text("다른 폴더로") }
             }

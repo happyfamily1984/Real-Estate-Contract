@@ -75,11 +75,23 @@ fun FolderPickerDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(6.dp))
-                Button(
-                    onClick = { onPick(null, newName.trim()) },
-                    enabled = newName.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("새 폴더 '${newName.ifBlank { "…" }}' 만들어 옮기기") }
+                // 같은 이름 폴더가 이미 있으면 새로 만들지 않고 그 폴더로 (같은 이름 폴더가 두 개 생기지 않게)
+                val same = folders.firstOrNull { it.name.trim() == newName.trim() }
+                when {
+                    same != null && same.id == currentFolderId -> Text(
+                        "지금 폴더와 이름이 같아요. 다른 이름을 입력하거나 위에서 폴더를 고르세요.",
+                        color = Brand.TextSub,
+                        fontSize = 12.sp,
+                    )
+                    same != null -> Button(onClick = { onPick(same.id, "") }, modifier = Modifier.fillMaxWidth()) {
+                        Text("이미 있는 '${same.name}' 폴더로 옮기기")
+                    }
+                    else -> Button(
+                        onClick = { onPick(null, newName.trim()) },
+                        enabled = newName.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("새 폴더 '${newName.ifBlank { "…" }}' 만들어 옮기기") }
+                }
             }
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
