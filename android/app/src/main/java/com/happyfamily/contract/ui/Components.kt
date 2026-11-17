@@ -42,6 +42,7 @@ fun GradientPillButton(
     modifier: Modifier = Modifier,
     height: Dp = 60.dp,
     enabled: Boolean = true,
+    showArrow: Boolean = true,
     leading: @Composable () -> Unit = {},
 ) {
     val shape = RoundedCornerShape(percent = 50)
@@ -59,12 +60,42 @@ fun GradientPillButton(
         leading()
         Spacer(Modifier.width(12.dp))
         Text(text, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.width(10.dp))
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = Color.White,
-        )
+        if (showArrow) {
+            Spacer(Modifier.width(10.dp))
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = Color.White,
+            )
+        }
+    }
+}
+
+/** 흰 바탕 알약 버튼 (파일 업로드 등 보조 동작) */
+@Composable
+fun WhitePillButton(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    height: Dp = 60.dp,
+    enabled: Boolean = true,
+) {
+    val shape = RoundedCornerShape(percent = 50)
+    Row(
+        modifier = modifier
+            .height(height)
+            .shadow(10.dp, shape, ambientColor = Brand.Blue.copy(alpha = 0.3f), spotColor = Brand.Blue.copy(alpha = 0.3f))
+            .clip(shape)
+            .background(Color.White)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 20.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = Brand.Blue, modifier = Modifier.size(24.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(text, color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

@@ -2,7 +2,9 @@ package com.happyfamily.contract.data
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.ImageDecoder
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import com.google.firebase.Firebase
 import com.google.firebase.firestore.Blob
@@ -21,6 +23,7 @@ import kotlin.math.max
 
 /**
  * 저장 구조 (모두 Firestore — Firebase 무료 요금제로 동작)
+ *  - users/{uid}/folders/{folderId}                부동산별 계약 폴더 (FolderRepository)
  *  - users/{uid}/contracts/{contractId}            계약서 정보, 분석 결과, 썸네일
  *  - users/{uid}/contracts/{contractId}/pages/{n}  페이지 사진 (JPEG, 문서 1개 1MB 한도 안으로 압축)
  *
@@ -32,6 +35,7 @@ object ContractRepository {
     // Firestore 문서 1개는 1MiB 까지라 그보다 충분히 작게 줄인다.
     private const val MAX_PAGE_BYTES = 700_000
     private const val THUMBNAIL_EDGE = 240
+    private const val PDF_RENDER_EDGE = 2000
 
     private val db get() = Firebase.firestore
 
@@ -66,22 +70,49 @@ object ContractRepository {
         awaitClose { registration.remove() }
     }
 
-    /** 사진을 압축해 저장하고 분석을 예약한다. 만들어진 계약서 id 를 돌려준다. */
+    /** 사진(JPG 등) 한 장 또는 PDF 의 한 페이지 */
+    private data class PageSource(val uri: Uri, val pdfPage: Int?)
+
+    /** 고른 파일들을 페이지 단위로 펼친다. PDF 는 페이지 수만큼. */
+    private fun expandPages(context: Context, files: List<Uri>): List<PageSource> = files.flatMap { uri ->
+        if (isPdf(context, uri)) {
+            context.contentResolver.openFileDescriptor(uri, "r").use { fd ->
+                requireNotNull(fd) { "PDF 파일을 열 수 없습니다." }
+                PdfRenderer(fd).use { renderer -> (0 until renderer.pageCount).map { PageSource(uri, it) } }
+            }
+        } else {
+            listOf(PageSource(uri, null))
+        }
+    }
+
+    private fun isPdf(context: Context, uri: Uri): Boolean =
+        context.contentResolver.getType(uri) == "application/pdf" ||
+            uri.lastPathSegment?.endsWith(".pdf", ignoreCase = true) == true
+
+    /**
+     * 사진·PDF 를 페이지별 JPEG 로 압축해 저장하고 분석을 예약한다. 만들어진 계약서 id 를 돌려준다.
+     * [folderId] 를 주면 그 폴더에 넣고, 없으면 분석 후 같은 부동산 폴더를 찾거나 새로 만든다.
+     */
     suspend fun createContract(
         context: Context,
-        pages: List<Uri>,
+        files: List<Uri>,
+        folderId: String?,
         onProgress: (done: Int, total: Int) -> Unit,
     ): String {
-        require(pages.isNotEmpty()) { "사진이 없습니다." }
-        require(pages.size <= MAX_PAGES) { "사진은 최대 ${MAX_PAGES}장까지 올릴 수 있습니다." }
+        require(files.isNotEmpty()) { "파일이 없습니다." }
+        val pages = withContext(Dispatchers.IO) { expandPages(context, files) }
+        require(pages.isNotEmpty()) { "페이지가 없는 파일입니다." }
+        require(pages.size <= MAX_PAGES) {
+            "한 번에 최대 ${MAX_PAGES}페이지까지 올릴 수 있습니다. (고른 파일: ${pages.size}페이지)"
+        }
         val uid = uid()
         val doc = contracts(uid).document()
 
         var thumbnail: ByteArray? = null
-        pages.forEachIndexed { index, uri ->
+        pages.forEachIndexed { index, page ->
             onProgress(index, pages.size)
             val (jpeg, thumb) = withContext(Dispatchers.IO) {
-                val bitmap = decode(context, uri)
+                val bitmap = if (page.pdfPage != null) renderPdfPage(context, page.uri, page.pdfPage) else decode(context, page.uri)
                 val result = compressToFit(bitmap) to
                     if (index == 0) thumbnailOf(bitmap) else null
                 bitmap.recycle()
@@ -95,20 +126,40 @@ object ContractRepository {
         onProgress(pages.size, pages.size)
 
         doc.set(
-            mapOf(
-                "status" to "pending",
-                "pageCount" to pages.size,
-                "thumbnail" to thumbnail?.let(Blob::fromBytes),
-                "memo" to "",
-                "title" to "분석 중인 계약서",
-                "createdAt" to FieldValue.serverTimestamp(),
-                "updatedAt" to FieldValue.serverTimestamp(),
-            ),
+            buildMap {
+                put("status", "pending")
+                put("pageCount", pages.size)
+                put("thumbnail", thumbnail?.let(Blob::fromBytes))
+                put("memo", "")
+                put("title", "분석 중인 계약서")
+                if (folderId != null) put("folderId", folderId)
+                put("createdAt", FieldValue.serverTimestamp())
+                put("updatedAt", FieldValue.serverTimestamp())
+            },
         ).await()
 
         AnalyzeWorker.enqueue(context, doc.id)
         return doc.id
     }
+
+    private fun renderPdfPage(context: Context, uri: Uri, index: Int): Bitmap =
+        context.contentResolver.openFileDescriptor(uri, "r").use { fd ->
+            requireNotNull(fd) { "PDF 파일을 열 수 없습니다." }
+            PdfRenderer(fd).use { renderer ->
+                renderer.openPage(index).use { page ->
+                    // PDF 한 페이지를 긴 변 2000px 정도로 그린다 (흰 바탕).
+                    val scale = PDF_RENDER_EDGE.toFloat() / max(page.width, page.height)
+                    val bitmap = Bitmap.createBitmap(
+                        (page.width * scale).toInt().coerceAtLeast(1),
+                        (page.height * scale).toInt().coerceAtLeast(1),
+                        Bitmap.Config.ARGB_8888,
+                    )
+                    bitmap.eraseColor(Color.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    bitmap
+                }
+            }
+        }
 
     suspend fun reanalyze(context: Context, id: String) {
         setStatus(id, "pending")
@@ -126,19 +177,43 @@ object ContractRepository {
     }
 
     suspend fun saveAnalysis(id: String, analysis: Map<String, Any?>) {
-        val address = analysis["propertyAddress"] as? String
+        val parsed = Contract.parseAnalysis(analysis)
         contracts(uid()).document(id).update(
             mapOf(
                 "status" to "done",
                 "analysis" to analysis,
-                "title" to (address?.takeIf { it.isNotBlank() } ?: "주소 미확인 계약서"),
-                "contractType" to (analysis["contractType"] as? String).orEmpty(),
+                "title" to parsed.propertyAddress.ifBlank { "주소 미확인 계약서" },
+                "contractType" to parsed.contractType,
+                // 화면에 보이지 않는 핵심 텍스트. 정리할 때 사진 대신 이것만 AI 에 보낸다.
+                "digest" to SummaryText.digest(id, parsed),
+                "sortDate" to parsed.representativeDate,
                 "error" to FieldValue.delete(),
                 "analyzedAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
     }
+
+    suspend fun setFolder(id: String, folderId: String) {
+        contracts(uid()).document(id).update(
+            mapOf("folderId" to folderId, "updatedAt" to FieldValue.serverTimestamp()),
+        ).await()
+    }
+
+    suspend fun get(id: String): Contract? =
+        contracts(uid()).document(id).get().await().takeIf { it.exists() }?.let(Contract::from)
+
+    /** 정리용: 폴더 안 계약서와 숨겨 둔 핵심 텍스트 */
+    suspend fun contractsInFolder(folderId: String): List<Pair<Contract, String>> =
+        contracts(uid()).whereEqualTo("folderId", folderId).get().await().documents.map { doc ->
+            val c = Contract.from(doc)
+            val digest = doc.getString("digest")?.takeIf { it.isNotBlank() }
+                ?: c.analysis?.let { SummaryText.digest(c.id, it) }.orEmpty()
+            c to digest
+        }
+
+    suspend fun allContracts(): List<Contract> =
+        contracts(uid()).get().await().documents.map(Contract::from)
 
     suspend fun updateMemo(id: String, memo: String) {
         contracts(uid()).document(id).update(

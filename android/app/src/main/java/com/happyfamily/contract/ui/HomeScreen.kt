@@ -1,0 +1,321 @@
+package com.happyfamily.contract.ui
+
+import android.app.Activity
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.CameraAlt
+import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.outlined.UploadFile
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.happyfamily.contract.R
+import com.happyfamily.contract.data.AuthRepository
+import com.happyfamily.contract.data.Folder
+import com.happyfamily.contract.ui.theme.Brand
+import kotlinx.coroutines.launch
+
+@Composable
+fun HomeScreen(
+    userEmail: String,
+    onOpenFolder: (String) -> Unit,
+    onOpenContract: (String) -> Unit,
+    onOpenStakeholders: () -> Unit,
+    viewModel: HomeViewModel = viewModel(),
+    importVm: ImportViewModel = viewModel(),
+) {
+    val activity = LocalContext.current as Activity
+    val scope = rememberCoroutineScope()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val query by viewModel.query.collectAsStateWithLifecycle()
+    val filter by viewModel.stakeholderFilter.collectAsStateWithLifecycle()
+    val loadError by viewModel.loadError.collectAsStateWithLifecycle()
+    val upload by importVm.upload.collectAsStateWithLifecycle()
+    val message by importVm.message.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    var confirmSignOut by remember { mutableStateOf(false) }
+
+    LaunchedEffect(message) {
+        message?.let {
+            snackbar.showSnackbar(it)
+            importVm.consumeMessage()
+        }
+    }
+
+    val importer = rememberImporter(importVm, folderId = null, onCreated = onOpenContract)
+
+    HomeContent(
+        state = state,
+        query = query,
+        onQueryChange = { viewModel.query.value = it },
+        stakeholderFilter = filter,
+        onStakeholderFilter = { viewModel.stakeholderFilter.value = it },
+        upload = upload,
+        loadError = loadError,
+        snackbar = snackbar,
+        onPickFiles = importer.pickFiles,
+        onScan = importer.scan,
+        onStakeholders = onOpenStakeholders,
+        onSignOut = { confirmSignOut = true },
+        onOpenFolder = onOpenFolder,
+        onOpenContract = onOpenContract,
+    )
+
+    if (confirmSignOut) {
+        AlertDialog(
+            onDismissRequest = { confirmSignOut = false },
+            title = { Text("로그아웃") },
+            text = { Text("$userEmail 계정에서 로그아웃할까요?\n저장된 계약서는 클라우드에 그대로 남아 있습니다.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmSignOut = false
+                    scope.launch { AuthRepository.signOut(activity) }
+                }) { Text("로그아웃") }
+            },
+            dismissButton = { TextButton(onClick = { confirmSignOut = false }) { Text("취소") } },
+        )
+    }
+}
+
+/** 화면 모양만 그리는 부분 (스크린샷 테스트에서도 사용). */
+@Composable
+internal fun HomeContent(
+    state: HomeState?,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    stakeholderFilter: String?,
+    onStakeholderFilter: (String?) -> Unit,
+    upload: UploadState?,
+    loadError: String?,
+    snackbar: SnackbarHostState,
+    onPickFiles: () -> Unit,
+    onScan: () -> Unit,
+    onStakeholders: () -> Unit,
+    onSignOut: () -> Unit,
+    onOpenFolder: (String) -> Unit,
+    onOpenContract: (String) -> Unit,
+) {
+    Scaffold(
+        containerColor = Color.Transparent,
+        modifier = Modifier.background(Brand.ScreenGradient),
+        topBar = {
+            Box(Modifier.fillMaxWidth()) {
+                // 시안의 오른쪽 위 건물 장식
+                Image(
+                    painter = painterResource(R.drawable.header_buildings),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .width(200.dp)
+                        .offset(y = 14.dp),
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .padding(start = 24.dp, end = 8.dp, top = 16.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "내 계약서",
+                        color = Brand.Navy,
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    HeaderIcon(Icons.Outlined.Groups, "이해관계자", onClick = onStakeholders)
+                    HeaderIcon(Icons.AutoMirrored.Outlined.Logout, "로그아웃", onClick = onSignOut)
+                }
+            }
+        },
+        floatingActionButton = {
+            if (upload == null) {
+                // 휴대폰에 있는 PDF·JPG 파일 업로드 + 카메라로 촬영
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    WhitePillButton(text = "파일 업로드", icon = Icons.Outlined.UploadFile, onClick = onPickFiles)
+                    GradientPillButton(
+                        text = "계약서 촬영",
+                        onClick = onScan,
+                        showArrow = false,
+                        leading = {
+                            Icon(Icons.Outlined.CameraAlt, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+                        },
+                    )
+                }
+            }
+        },
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            SearchField(
+                query = query,
+                onQueryChange = onQueryChange,
+                placeholder = "폴더, 주소, 이름, 메모로 검색",
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            )
+            upload?.let { UploadProgress(it, Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) }
+
+            when {
+                loadError != null -> CenterText("목록을 불러오지 못했습니다.\n$loadError")
+                state == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                state.isEmpty -> EmptyState()
+                else -> {
+                    StakeholderChips(state, stakeholderFilter, onStakeholderFilter, onStakeholders)
+                    val nothing = state.unfiled.isEmpty() && state.ongoing.isEmpty() && state.done.isEmpty()
+                    if (nothing) {
+                        CenterText("검색 결과가 없습니다.")
+                    } else {
+                        LazyColumn(
+                            contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 112.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            if (state.unfiled.isNotEmpty()) {
+                                sectionHeader("분석 중인 계약서", state.unfiled.size)
+                                items(state.unfiled, key = { "c-" + it.id }) { c ->
+                                    ContractCard(c, onClick = { onOpenContract(c.id) })
+                                }
+                            }
+                            folderSection("진행중", state.ongoing, state.contractCounts, onOpenFolder)
+                            folderSection("완료", state.done, state.contractCounts, onOpenFolder)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeaderIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(icon, contentDescription = description, tint = Brand.Navy, modifier = Modifier.size(28.dp))
+    }
+}
+
+@Composable
+private fun StakeholderChips(
+    state: HomeState,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+    onStakeholders: () -> Unit,
+) {
+    if (state.stakeholders.isEmpty()) {
+        // 이해관계자가 없으면 입력을 권한다.
+        Row(
+            Modifier
+                .padding(horizontal = 20.dp, vertical = 4.dp)
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brand.CardTint)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "이해관계자(본인) 이름을 입력하면 그 사람 기준으로 진행중·완료를 정리해요.",
+                color = Brand.Navy,
+                fontSize = 13.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onStakeholders) { Text("입력") }
+        }
+        return
+    }
+    Row(
+        Modifier
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val colors = FilterChipDefaults.filterChipColors(
+            containerColor = Color.White,
+            selectedContainerColor = Brand.Blue,
+            selectedLabelColor = Color.White,
+        )
+        FilterChip(selected = selected == null, onClick = { onSelect(null) }, label = { Text("전체") }, colors = colors)
+        state.stakeholders.forEach { s ->
+            FilterChip(
+                selected = selected == s.name,
+                onClick = { onSelect(s.name) },
+                label = { Text(s.name) },
+                colors = colors,
+            )
+        }
+    }
+}
+
+private fun LazyListScope.sectionHeader(title: String, count: Int) {
+    item(key = "h-$title") {
+        Row(Modifier.padding(top = 10.dp, start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, color = Brand.Navy, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(6.dp))
+            Text("$count", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun LazyListScope.folderSection(
+    title: String,
+    folders: List<Folder>,
+    counts: Map<String, Int>,
+    onOpenFolder: (String) -> Unit,
+) {
+    if (folders.isEmpty()) return
+    sectionHeader(title, folders.size)
+    items(folders, key = { "f-" + it.id }) { f ->
+        FolderCard(f, counts[f.id] ?: 0, onClick = { onOpenFolder(f.id) })
+    }
+}

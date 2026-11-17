@@ -24,21 +24,37 @@ fun AppNavigation() {
     // 계정이 바뀌면 화면 상태를 새로 만든다.
     key(signedInUser.uid) {
         val nav = rememberNavController()
-        NavHost(navController = nav, startDestination = "list") {
-            composable("list") {
-                ContractListScreen(
+        val idArg = listOf(navArgument("id") { type = NavType.StringType })
+        NavHost(navController = nav, startDestination = "home") {
+            composable("home") {
+                HomeScreen(
                     userEmail = signedInUser.email.orEmpty(),
-                    onOpen = { id -> nav.navigate("detail/$id") },
+                    onOpenFolder = { id -> nav.navigate("folder/$id") },
+                    onOpenContract = { id -> nav.navigate("detail/$id") },
+                    onOpenStakeholders = { nav.navigate("stakeholders") },
                 )
             }
-            composable(
-                "detail/{id}",
-                arguments = listOf(navArgument("id") { type = NavType.StringType }),
-            ) { entry ->
+            composable("folder/{id}", arguments = idArg) { entry ->
+                FolderScreen(
+                    folderId = entry.arguments?.getString("id").orEmpty(),
+                    onBack = { nav.popBackStack() },
+                    onOpenContract = { id -> nav.navigate("detail/$id") },
+                )
+            }
+            composable("detail/{id}", arguments = idArg) { entry ->
                 ContractDetailScreen(
                     contractId = entry.arguments?.getString("id").orEmpty(),
                     onBack = { nav.popBackStack() },
                     onOpenPhoto = { id, page -> nav.navigate("photo/$id/$page") },
+                    onOpenFolder = { id ->
+                        // 폴더에서 들어왔으면 그대로 돌아가고, 아니면 폴더를 연다.
+                        val previous = nav.previousBackStackEntry
+                        if (previous?.destination?.route == "folder/{id}" && previous.arguments?.getString("id") == id) {
+                            nav.popBackStack()
+                        } else {
+                            nav.navigate("folder/$id")
+                        }
+                    },
                 )
             }
             composable(
@@ -51,6 +67,18 @@ fun AppNavigation() {
                 PhotoViewerScreen(
                     contractId = entry.arguments?.getString("id").orEmpty(),
                     initialPage = entry.arguments?.getInt("page") ?: 0,
+                    onBack = { nav.popBackStack() },
+                )
+            }
+            composable("stakeholders") {
+                StakeholdersScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenReport = { id -> nav.navigate("report/$id") },
+                )
+            }
+            composable("report/{id}", arguments = idArg) { entry ->
+                StakeholderReportScreen(
+                    stakeholderId = entry.arguments?.getString("id").orEmpty(),
                     onBack = { nav.popBackStack() },
                 )
             }

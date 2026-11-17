@@ -20,6 +20,16 @@
             </intent-filter>
         </activity>
 
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- 문서 스캐너 모듈을 설치 시점에 미리 받아 둔다. -->
         <meta-data
             android:name="com.google.mlkit.vision.DEPENDENCIES"

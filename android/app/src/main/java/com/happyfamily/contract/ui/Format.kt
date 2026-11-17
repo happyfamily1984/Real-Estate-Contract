@@ -7,19 +7,8 @@ import java.util.Locale
 
 private val numberFormat = NumberFormat.getNumberInstance(Locale.KOREA)
 
-/** 350000000 → "3억 5,000만원", 1500000 → "150만원", 0 → "-" */
-fun formatWon(amount: Long): String {
-    if (amount <= 0L) return "-"
-    val eok = amount / 100_000_000
-    val man = (amount % 100_000_000) / 10_000
-    val won = amount % 10_000
-    val parts = buildList {
-        if (eok > 0) add("${numberFormat.format(eok)}억")
-        if (man > 0) add("${numberFormat.format(man)}만")
-        if (won > 0) add(numberFormat.format(won))
-    }
-    return parts.joinToString(" ") + "원"
-}
+/** 350000000 → "3억 5,000만원" */
+fun formatWon(amount: Long): String = com.happyfamily.contract.data.formatWonKr(amount)
 
 /** "3억 5,000만원 (350,000,000원)" */
 fun formatWonDetailed(amount: Long): String =

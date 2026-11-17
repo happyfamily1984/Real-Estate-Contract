@@ -27,8 +27,18 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             ContractRepository.setStatus(id, "processing")
             val pageCount = ContractRepository.contractPageCount(id)
             val pages = ContractRepository.allPageImages(id, pageCount)
-            val analysis = GeminiAnalyzer.analyze(applicationContext, pages)
-            ContractRepository.saveAnalysis(id, analysis)
+            val folders = runCatching { FolderRepository.allFolders() }.getOrDefault(emptyList())
+            val result = GeminiAnalyzer.analyze(applicationContext, pages, folders)
+            val matchFolderId = result["matchFolderId"] as? String
+            ContractRepository.saveAnalysis(id, result - "matchFolderId")
+
+            // 같은 부동산 폴더에 넣고(없으면 새로 만들고) 그 폴더의 계약내용정리를 새로 만든다.
+            // 이 단계가 실패해도 분석 결과는 이미 저장돼 있으므로 계약서를 오류로 만들지 않는다.
+            runCatching {
+                val contract = ContractRepository.get(id) ?: return Result.success()
+                val folderId = FolderRepository.assignFolder(contract, matchFolderId, folders)
+                FolderRepository.refreshFolderSummary(applicationContext, folderId, force = false)
+            }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // 재분석으로 교체되거나 취소됨

@@ -55,6 +55,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil3.compose.AsyncImage
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.sp
+import com.happyfamily.contract.data.Folder
+import com.happyfamily.contract.data.FolderRepository
+import com.happyfamily.contract.data.SummaryWorker
+import com.happyfamily.contract.ui.theme.Brand
 import com.happyfamily.contract.data.Contract
 import com.happyfamily.contract.data.ContractAnalysis
 import com.happyfamily.contract.data.ContractRepository
@@ -68,9 +76,13 @@ fun ContractDetailScreen(
     contractId: String,
     onBack: () -> Unit,
     onOpenPhoto: (String, Int) -> Unit,
+    onOpenFolder: (String) -> Unit,
 ) {
     val flow = remember(contractId) { ContractRepository.contractFlow(contractId) }
     val loaded by flow.collectAsStateWithLifecycle(initialValue = null)
+    val foldersFlow = remember { FolderRepository.foldersFlow() }
+    val folders by foldersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    var moving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var confirmDelete by remember { mutableStateOf(false) }
@@ -132,6 +144,13 @@ fun ContractDetailScreen(
 
             PhotoStrip(contract, onOpenPhoto)
 
+            FolderRow(
+                folder = folders.firstOrNull { it.id == contract.folderId },
+                analyzing = contract.status != ContractStatus.DONE,
+                onOpen = { contract.folderId?.let(onOpenFolder) },
+                onMove = { moving = true },
+            )
+
             when (contract.status) {
                 ContractStatus.PENDING, ContractStatus.PROCESSING -> StatusCard(
                     "AI가 계약서를 읽고 있어요. 보통 30초~1분 걸립니다.\n다른 화면으로 가도 백그라운드에서 계속 처리됩니다.",
@@ -151,6 +170,34 @@ fun ContractDetailScreen(
         }
     }
 
+    if (moving && contract != null) {
+        MoveDialog(
+            contract = contract,
+            folders = folders,
+            onDismiss = { moving = false },
+            onMove = { target ->
+                moving = false
+                scope.launch {
+                    runCatching {
+                        val old = contract.folderId
+                        val a = contract.analysis
+                        val newId = target ?: FolderRepository.createFolder(
+                            name = a?.folderName?.ifBlank { null } ?: "새 계약 폴더",
+                            address = a?.propertyAddress.orEmpty(),
+                            stakeholder = FolderRepository.defaultStakeholderName(),
+                            thumbnail = contract.thumbnail,
+                        )
+                        if (newId != old) {
+                            ContractRepository.setFolder(contract.id, newId)
+                            SummaryWorker.enqueue(context, newId, force = false)
+                            old?.let { SummaryWorker.enqueue(context, it, force = false) }
+                        }
+                    }.onFailure { actionError = "옮기지 못했습니다: ${it.message}" }
+                }
+            },
+        )
+    }
+
     if (confirmDelete && contract != null) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -162,7 +209,11 @@ fun ContractDetailScreen(
                     deleting = true
                     scope.launch {
                         runCatching { ContractRepository.delete(contract) }
-                            .onSuccess { onBack() }
+                            .onSuccess {
+                                // 폴더의 계약내용정리도 새로 맞춘다.
+                                contract.folderId?.let { SummaryWorker.enqueue(context, it, force = false) }
+                                onBack()
+                            }
                             .onFailure {
                                 deleting = false
                                 actionError = "삭제 실패: ${it.message}"
@@ -173,6 +224,63 @@ fun ContractDetailScreen(
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("취소") } },
         )
     }
+}
+
+@Composable
+private fun FolderRow(folder: Folder?, analyzing: Boolean, onOpen: () -> Unit, onMove: () -> Unit) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+    ) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.Folder, contentDescription = null, tint = Brand.Blue)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("계약 폴더", color = Brand.TextSub, fontSize = 12.sp)
+                Text(
+                    folder?.name ?: if (analyzing) "분석이 끝나면 자동으로 정해져요" else "폴더 없음",
+                    color = Brand.Navy,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            if (folder != null) TextButton(onClick = onOpen) { Text("열기") }
+            TextButton(onClick = onMove, enabled = !analyzing) { Text("옮기기") }
+        }
+    }
+}
+
+/** 계약서를 다른 폴더(또는 새 폴더)로 옮긴다. */
+@Composable
+private fun MoveDialog(
+    contract: Contract,
+    folders: List<Folder>,
+    onDismiss: () -> Unit,
+    onMove: (folderId: String?) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("폴더 옮기기") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                folders.sortedBy { it.name }.forEach { f ->
+                    Row(
+                        Modifier.fillMaxWidth().clickable { onMove(f.id) }.padding(vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = f.id == contract.folderId, onClick = { onMove(f.id) })
+                        Column {
+                            Text(f.name)
+                            if (f.address.isNotBlank()) Text(f.address, color = Brand.TextSub, fontSize = 12.sp)
+                        }
+                    }
+                }
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                TextButton(onClick = { onMove(null) }) { Text("+ 새 폴더 만들어 옮기기") }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
+    )
 }
 
 @Composable
@@ -227,7 +335,8 @@ private fun StatusCard(text: String, loading: Boolean) {
 
 @Composable
 private fun AnalysisSections(a: ContractAnalysis) {
-    val (ownerLabel, userLabel) = if (a.isSale) "매도인" to "매수인" else "임대인" to "임차인"
+    val ownerLabel = a.ownerLabel
+    val userLabel = a.userLabel
 
     Section("한눈에 보기") {
         Text(a.summary, style = MaterialTheme.typography.bodyLarge)
@@ -256,6 +365,9 @@ private fun AnalysisSections(a: ContractAnalysis) {
         Field("소재지", a.propertyAddress)
         Field("면적", a.area)
         Field("계약일", formatDate(a.contractDate))
+        if (a.acquisitionDate.isNotBlank()) {
+            Field("취득일", formatDate(a.acquisitionDate) + if (a.acquisitionDateEstimated) " (예상)" else "")
+        }
         if (a.isSale) {
             Field("인도일", formatDate(a.leaseStart))
         } else {
@@ -265,7 +377,15 @@ private fun AnalysisSections(a: ContractAnalysis) {
 
     Section("금액") {
         if (a.isSale) {
-            Field("매매대금", formatWonDetailed(a.salePrice))
+            val label = when (a.contractType) {
+                "분양" -> "분양금액"
+                "경매" -> "매각대금"
+                else -> "매매대금"
+            }
+            Field(label, formatWonDetailed(a.salePrice))
+            if (a.acquisitionAmount > 0 && a.acquisitionAmount != a.salePrice) {
+                Field("취득금액", formatWonDetailed(a.acquisitionAmount))
+            }
         } else {
             Field("보증금", formatWonDetailed(a.deposit))
             if (a.monthlyRent > 0) Field("월세", formatWonDetailed(a.monthlyRent))
