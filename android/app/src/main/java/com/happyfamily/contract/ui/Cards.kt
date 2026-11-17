@@ -95,7 +95,11 @@ fun SearchField(query: String, onQueryChange: (String) -> Unit, placeholder: Str
 @Composable
 fun UploadProgress(state: UploadState, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth()) {
-        Text("계약서 저장 중… (${state.done}/${state.total})", color = Brand.Navy, style = MaterialTheme.typography.bodyMedium)
+        val title = if (state.total > 1) "계약서 저장 중… (${state.done + 1}/${state.total}건)" else "계약서 저장 중…"
+        Text(title, color = Brand.Navy, style = MaterialTheme.typography.bodyMedium)
+        if (state.detail.isNotBlank()) {
+            Text(state.detail, color = Brand.TextSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
         Spacer(Modifier.height(6.dp))
         LinearProgressIndicator(
             progress = { if (state.total == 0) 0f else state.done / state.total.toFloat() },
@@ -297,7 +301,12 @@ fun ContractCard(contract: Contract, onClick: () -> Unit, ongoing: Boolean = fal
                 )
                 Spacer(Modifier.height(4.dp))
                 when (contract.status) {
-                    ContractStatus.PENDING, ContractStatus.PROCESSING -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    ContractStatus.PENDING -> Text(
+                        "분석 대기 중 · 올린 순서대로 분석해요",
+                        color = Brand.TextSub,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    ContractStatus.PROCESSING -> Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(6.dp))
                         Text("AI가 계약서를 분석하고 있어요", color = Brand.TextSub, style = MaterialTheme.typography.bodySmall)

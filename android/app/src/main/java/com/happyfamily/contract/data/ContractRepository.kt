@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.ImageDecoder
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.provider.OpenableColumns
 import com.google.firebase.Firebase
 import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.FieldValue
@@ -30,7 +31,12 @@ import kotlin.math.max
  * 사진을 저장하고 status = "pending" 으로 만든 뒤 [AnalyzeWorker] 가 Gemini 로 분석한다.
  */
 object ContractRepository {
-    const val MAX_PAGES = 15
+    /** 계약서 한 건의 최대 페이지 수 */
+    const val MAX_PAGES = 50
+
+    /** 한 번에 올릴 수 있는 파일 수와 전체 크기 */
+    const val MAX_FILES = 100
+    const val MAX_TOTAL_BYTES = 100L * 1024 * 1024
 
     // Firestore 문서 1개는 1MiB 까지라 그보다 충분히 작게 줄인다.
     private const val MAX_PAGE_BYTES = 700_000
@@ -85,7 +91,22 @@ object ContractRepository {
         }
     }
 
-    private fun isPdf(context: Context, uri: Uri): Boolean =
+    /** 파일 크기(바이트). 알 수 없으면 0 */
+    fun fileSize(context: Context, uri: Uri): Long =
+        runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else 0L
+            } ?: 0L
+        }.getOrDefault(0L)
+
+    fun fileName(context: Context, uri: Uri): String =
+        runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+            }
+        }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+
+    fun isPdf(context: Context, uri: Uri): Boolean =
         context.contentResolver.getType(uri) == "application/pdf" ||
             uri.lastPathSegment?.endsWith(".pdf", ignoreCase = true) == true
 
@@ -103,7 +124,7 @@ object ContractRepository {
         val pages = withContext(Dispatchers.IO) { expandPages(context, files) }
         require(pages.isNotEmpty()) { "페이지가 없는 파일입니다." }
         require(pages.size <= MAX_PAGES) {
-            "한 번에 최대 ${MAX_PAGES}페이지까지 올릴 수 있습니다. (고른 파일: ${pages.size}페이지)"
+            "계약서 한 건은 최대 ${MAX_PAGES}페이지까지입니다. (${pages.size}페이지)"
         }
         val uid = uid()
         val doc = contracts(uid).document()

@@ -43,8 +43,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     /** null 이면 아직 불러오는 중 */
     val state: StateFlow<HomeState?> = combine(
-        FolderRepository.foldersFlow().catch { _loadError.value = it.message },
-        ContractRepository.contractsFlow().catch { _loadError.value = it.message },
+        FolderRepository.foldersFlow().catch { _loadError.value = friendlyLoadError(it) },
+        ContractRepository.contractsFlow().catch { _loadError.value = friendlyLoadError(it) },
         FolderRepository.stakeholdersFlow().catch { emit(emptyList()) },
         filters,
     ) { folders, contracts, stakeholders, (q, who) ->
@@ -66,5 +66,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     init {
         // 폴더 기능 이전에 저장된 계약서를 폴더로 옮긴다.
         viewModelScope.launch { runCatching { FolderRepository.fileUnfiledContracts(getApplication()) } }
+    }
+}
+
+/** 목록을 못 불러왔을 때 사용자가 할 일을 알려 준다. */
+fun friendlyLoadError(e: Throwable): String {
+    val denied = e is com.google.firebase.firestore.FirebaseFirestoreException &&
+        e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
+    return if (denied) {
+        "Firebase 보안 규칙이 최신이 아닙니다.\n\nFirebase 콘솔 → Firestore Database → 규칙 탭에 " +
+            "GitHub 저장소의 firestore.rules 내용을 통째로 붙여 넣고 '게시'를 누른 뒤 앱을 다시 여세요."
+    } else {
+        e.message ?: e.toString()
     }
 }

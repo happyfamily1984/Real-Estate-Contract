@@ -22,7 +22,7 @@ service cloud.firestore {
         && request.resource.data.status in ['pending', 'processing', 'done', 'error']
         && request.resource.data.pageCount is int
         && request.resource.data.pageCount >= 1
-        && request.resource.data.pageCount <= 15
+        && request.resource.data.pageCount <= 50
         && smallBytes('thumbnail', 100000);
 
       // 페이지 사진 (JPEG). 문서 1개 최대 1MiB.

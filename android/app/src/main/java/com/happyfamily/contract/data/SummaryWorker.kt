@@ -27,9 +27,10 @@ class SummaryWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         private const val KEY_FOLDER = "folderId"
         private const val KEY_FORCE = "force"
 
-        fun enqueue(context: Context, folderId: String, force: Boolean) {
+        fun enqueue(context: Context, folderId: String, force: Boolean, delaySeconds: Long = 0) {
             val request = OneTimeWorkRequestBuilder<SummaryWorker>()
                 .setInputData(workDataOf(KEY_FOLDER to folderId, KEY_FORCE to force))
+                .setInitialDelay(delaySeconds, java.util.concurrent.TimeUnit.SECONDS)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
             WorkManager.getInstance(context)

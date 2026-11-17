@@ -221,10 +221,14 @@ object GeminiAnalyzer {
         } else {
             folders.take(200).joinToString("\n") { "- id=${it.id} / 이름=${it.name} / 주소=${it.address}" }
         }
+        val prepared = AiImages.prepare(pages)
         val request = content {
-            pages.forEachIndexed { i, jpeg ->
+            prepared.pages.forEachIndexed { i, jpeg ->
                 text("[${i + 1} / ${pages.size} 페이지]")
                 inlineData(jpeg, "image/jpeg")
+            }
+            if (prepared.skipped > 0) {
+                text("(서류가 길어 전체 ${pages.size}페이지 중 앞 ${prepared.pages.size}페이지만 보냅니다. cautions 에 이 사실을 적어 주세요.)")
             }
             text("기존 폴더:\n$folderList\n\n위 서류 사진의 내용을 스키마에 맞춰 정리해 주세요.")
         }
@@ -258,7 +262,7 @@ object GeminiAnalyzer {
     }
 
     fun friendlyMessage(e: Throwable): String = when (e) {
-        is QuotaExceededException -> "오늘 무료 AI 사용량을 다 썼습니다. 내일 다시 시도해 주세요."
+        is QuotaExceededException -> "무료 AI 사용량을 다 썼습니다. 잠시 뒤(하루 한도면 내일) 다시 분석을 눌러 주세요."
         is PromptBlockedException -> "AI가 이 서류의 분석을 거절했습니다. 부동산 서류가 맞는지 확인해 주세요."
         is ServerException -> "AI 서버 오류입니다. 잠시 후 다시 시도해 주세요. (${e.message})"
         is FirebaseAIException -> "AI 분석 중 오류가 발생했습니다. (${e.message})"
