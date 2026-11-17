@@ -7,7 +7,12 @@ import com.google.firebase.ai.type.Content
 import com.google.firebase.ai.type.FirebaseAIException
 import com.google.firebase.ai.type.GenerativeBackend
 import com.google.firebase.ai.type.PromptBlockedException
+import com.google.firebase.ai.type.InvalidAPIKeyException
 import com.google.firebase.ai.type.QuotaExceededException
+import com.google.firebase.ai.type.RequestTimeoutException
+import com.google.firebase.ai.type.ServiceDisabledException
+import com.google.firebase.ai.type.UnsupportedUserLocationException
+import com.google.firebase.ai.type.RequestOptions
 import com.google.firebase.ai.type.Schema
 import com.google.firebase.ai.type.ServerException
 import com.google.firebase.ai.type.content
@@ -183,6 +188,8 @@ object GeminiAnalyzer {
                     temperature = 0f
                 },
                 systemInstruction = content { text(system) },
+                // 페이지가 많으면 응답이 오래 걸릴 수 있다.
+                requestOptions = RequestOptions(timeoutInMillis = 4 * 60_000L),
             )
 
     /** 후보 모델을 차례로 써서 JSON 응답을 받는다. */
@@ -262,6 +269,12 @@ object GeminiAnalyzer {
     }
 
     fun friendlyMessage(e: Throwable): String = when (e) {
+        is ServiceDisabledException ->
+            "Firebase 콘솔 → AI Logic 에서 Gemini Developer API 를 켜 주세요. (켠 뒤 몇 분 지나면 됩니다)"
+        is InvalidAPIKeyException ->
+            "AI 키 설정이 올바르지 않습니다. Firebase 콘솔 → AI Logic 설정을 확인하고 google-services.json 을 다시 받아 주세요."
+        is UnsupportedUserLocationException -> "현재 위치(국가)에서는 Gemini 무료 API 를 쓸 수 없습니다."
+        is RequestTimeoutException -> "AI 응답이 너무 오래 걸렸습니다. 잠시 뒤 다시 시도합니다."
         is QuotaExceededException -> "무료 AI 사용량을 다 썼습니다. 잠시 뒤(하루 한도면 내일) 다시 분석을 눌러 주세요."
         is PromptBlockedException -> "AI가 이 서류의 분석을 거절했습니다. 부동산 서류가 맞는지 확인해 주세요."
         is ServerException -> "AI 서버 오류입니다. 잠시 후 다시 시도해 주세요. (${e.message})"

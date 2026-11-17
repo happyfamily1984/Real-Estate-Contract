@@ -11,7 +11,7 @@ import kotlin.math.max
  */
 object AiImages {
     /** base64 로 늘어나는 것까지 생각한 원본 바이트 합계 상한 */
-    private const val BUDGET_BYTES = 13_000_000
+    const val BUDGET_BYTES = 9_000_000
 
     data class Prepared(val pages: List<ByteArray>, val skipped: Int)
 

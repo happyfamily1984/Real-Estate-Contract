@@ -3,6 +3,7 @@ package com.happyfamily.contract.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.happyfamily.contract.data.AnalyzeWorker
 import com.happyfamily.contract.data.Contract
 import com.happyfamily.contract.data.ContractRepository
 import com.happyfamily.contract.data.Folder
@@ -63,9 +64,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** "분석 다시 시작" — 멈춘 것 같을 때 대기 중인 계약서를 모두 처음부터 다시 줄 세운다. */
+    fun restartAnalysis() {
+        viewModelScope.launch { runCatching { AnalyzeWorker.recoverStuck(getApplication(), force = true) } }
+    }
+
     init {
         // 폴더 기능 이전에 저장된 계약서를 폴더로 옮긴다.
         viewModelScope.launch { runCatching { FolderRepository.fileUnfiledContracts(getApplication()) } }
+        // 앱이 꺼지거나 예전 버전에서 멈춘 분석을 다시 대기열에 넣는다.
+        viewModelScope.launch { runCatching { AnalyzeWorker.recoverStuck(getApplication()) } }
     }
 }
 

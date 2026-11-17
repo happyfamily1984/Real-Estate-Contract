@@ -302,9 +302,11 @@ fun ContractCard(contract: Contract, onClick: () -> Unit, ongoing: Boolean = fal
                 Spacer(Modifier.height(4.dp))
                 when (contract.status) {
                     ContractStatus.PENDING -> Text(
-                        "분석 대기 중 · 올린 순서대로 분석해요",
+                        contract.error ?: "분석 대기 중 · 올린 순서대로 분석해요",
                         color = Brand.TextSub,
                         style = MaterialTheme.typography.bodySmall,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
                     )
                     ContractStatus.PROCESSING -> Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)

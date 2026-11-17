@@ -32,7 +32,7 @@ class AiImagesTest {
         val prepared = AiImages.prepare(pages)
         val total = prepared.pages.sumOf { it.size }
         println("원본 ${pages.sumOf { it.size } / 1_000_000}MB → ${total / 1_000_000}MB, 보낸 페이지 ${prepared.pages.size}, 빠진 페이지 ${prepared.skipped}")
-        assertTrue(total <= 13_000_000)
+        assertTrue(total <= AiImages.BUDGET_BYTES)
         assertEquals(50, prepared.pages.size + prepared.skipped)
     }
 

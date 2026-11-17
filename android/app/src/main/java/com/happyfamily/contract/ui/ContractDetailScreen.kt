@@ -63,6 +63,8 @@ import com.happyfamily.contract.data.Folder
 import com.happyfamily.contract.data.FolderRepository
 import com.happyfamily.contract.data.SummaryWorker
 import com.happyfamily.contract.ui.theme.Brand
+import com.happyfamily.contract.data.AnalyzeWorker
+import androidx.compose.material3.OutlinedButton
 import com.happyfamily.contract.data.Contract
 import com.happyfamily.contract.data.ContractAnalysis
 import com.happyfamily.contract.data.ContractRepository
@@ -152,10 +154,29 @@ fun ContractDetailScreen(
             )
 
             when (contract.status) {
-                ContractStatus.PENDING, ContractStatus.PROCESSING -> StatusCard(
-                    "AI가 계약서를 읽고 있어요. 보통 30초~1분 걸립니다.\n다른 화면으로 가도 백그라운드에서 계속 처리됩니다.",
-                    loading = true,
-                )
+                ContractStatus.PENDING, ContractStatus.PROCESSING -> {
+                    val text = buildString {
+                        append(
+                            if (contract.status == ContractStatus.PENDING) {
+                                "분석 대기 중이에요. 올린 순서대로 하나씩 분석합니다."
+                            } else {
+                                "AI가 계약서를 읽고 있어요. 보통 30초~1분 걸립니다."
+                            },
+                        )
+                        append("\n다른 화면으로 가도 백그라운드에서 계속 처리됩니다.")
+                        contract.error?.let { append("\n\n").append(it) }
+                    }
+                    StatusCard(text, loading = true)
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                runCatching { AnalyzeWorker.recoverStuck(context, force = true) }
+                                    .onFailure { actionError = "다시 시작하지 못했습니다: ${it.message}" }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("오래 멈춰 있으면: 분석 다시 시작") }
+                }
                 ContractStatus.ERROR -> {
                     StatusCard("분석에 실패했습니다.\n${contract.error.orEmpty()}", loading = false)
                     Button(

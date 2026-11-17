@@ -11,8 +11,13 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.google.firebase.ai.type.QuotaExceededException
+import com.google.firebase.ai.type.RequestTimeoutException
 import com.google.firebase.ai.type.ServerException
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 계약서 분석을 백그라운드에서 실행한다. 앱 화면을 벗어나도 계속 진행되고,
@@ -22,37 +27,52 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     override suspend fun doWork(): Result {
         val id = inputData.getString(KEY_ID) ?: return Result.success()
-        if (AuthRepository.currentUser == null) return Result.success()
+        // 백그라운드에서 막 깨어나 로그인 정보가 아직 없을 수 있다 → 잠시 뒤 다시
+        if (AuthRepository.currentUser == null) {
+            return if (runAttemptCount < MAX_ATTEMPTS) Result.retry() else Result.success()
+        }
 
         return try {
+            val contract = ContractRepository.get(id) ?: return Result.success() // 지워진 계약서
+            if (contract.status == ContractStatus.DONE) return Result.success() // 이미 끝남 (중복 예약)
+
             ContractRepository.setStatus(id, "processing")
-            val pageCount = ContractRepository.contractPageCount(id)
-            val pages = ContractRepository.allPageImages(id, pageCount)
+            val pages = ContractRepository.allPageImages(id, contract.pageCount)
             val folders = runCatching { FolderRepository.allFolders() }.getOrDefault(emptyList())
-            val result = GeminiAnalyzer.analyze(applicationContext, pages, folders)
+            val result = withTimeoutOrNull(AI_TIMEOUT_MS) { GeminiAnalyzer.analyze(applicationContext, pages, folders) }
+                ?: throw java.io.IOException("AI 응답이 ${AI_TIMEOUT_MS / 60_000}분 넘게 오지 않았습니다.")
             val matchFolderId = result["matchFolderId"] as? String
             ContractRepository.saveAnalysis(id, result - "matchFolderId")
 
             // 같은 부동산 폴더에 넣고(없으면 새로 만들고) 그 폴더의 계약내용정리를 예약한다.
             // 이 단계가 실패해도 분석 결과는 이미 저장돼 있으므로 계약서를 오류로 만들지 않는다.
             runCatching {
-                val contract = ContractRepository.get(id) ?: return Result.success()
-                val folderId = FolderRepository.assignFolder(contract, matchFolderId, folders)
+                val saved = ContractRepository.get(id) ?: return Result.success()
+                val folderId = FolderRepository.assignFolder(saved, matchFolderId, folders)
                 // 여러 장을 한꺼번에 올리면 같은 폴더 정리가 여러 번 예약되는데, 마지막 한 번만 실행된다.
                 SummaryWorker.enqueue(applicationContext, folderId, force = false, delaySeconds = 20)
             }.onFailure { if (it is kotlinx.coroutines.CancellationException) throw it }
             Result.success()
         } catch (e: kotlinx.coroutines.CancellationException) {
+            // 시스템이 작업을 멈춤 (네트워크 끊김 등) → WorkManager 가 나중에 다시 실행한다.
+            withContext(NonCancellable) { runCatching { ContractRepository.setStatus(id, "pending", "잠시 멈췄다가 다시 분석합니다.") } }
             throw e
-        } catch (e: Exception) {
-            // 사용량 제한(분당 요청 수)·서버 오류·네트워크 오류는 잠시 뒤 다시 시도한다.
-            val retryable = e is QuotaExceededException || e is ServerException || e is java.io.IOException
+        } catch (e: Throwable) {
+            // 메모리 부족 같은 Error 까지 모두 잡는다. 여기서 작업이 실패로 끝나면
+            // 대기열 뒤의 계약서들이 전부 멈추기 때문에, 오류는 계약서에 적고 항상 다음으로 넘어간다.
+            val retryable = e is QuotaExceededException || e is ServerException || e is RequestTimeoutException ||
+                e is java.io.IOException
             if (retryable && runAttemptCount < MAX_ATTEMPTS) {
-                runCatching { ContractRepository.setStatus(id, "pending") }
+                val reason = "다시 시도 예정 (${runAttemptCount + 1}/$MAX_ATTEMPTS): ${GeminiAnalyzer.friendlyMessage(e)}"
+                runCatching { ContractRepository.setStatus(id, "pending", reason) }
                 Result.retry()
             } else {
-                runCatching { ContractRepository.setStatus(id, "error", GeminiAnalyzer.friendlyMessage(e)) }
-                // 실패도 success 로 끝내야 대기열의 다음 계약서가 이어서 분석된다 (오류는 계약서에 기록됨).
+                val message = if (e is OutOfMemoryError) {
+                    "사진이 너무 커서 분석하지 못했습니다. 페이지 수를 줄여 다시 올려 주세요."
+                } else {
+                    GeminiAnalyzer.friendlyMessage(e)
+                }
+                runCatching { ContractRepository.setStatus(id, "error", message) }
                 Result.success()
             }
         }
@@ -62,6 +82,7 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         private const val KEY_ID = "contractId"
         private const val MAX_ATTEMPTS = 6
         private const val QUEUE = "analyze-queue"
+        private const val AI_TIMEOUT_MS = 5 * 60_000L
 
         /**
          * 분석 대기열 맨 뒤에 넣는다. 한 번에 하나씩 순서대로 분석하므로
@@ -76,6 +97,25 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 .build()
             WorkManager.getInstance(context)
                 .enqueueUniqueWork(QUEUE, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        }
+
+        /** 대기열에 남은(아직 안 끝난) 작업이 있는지 */
+        suspend fun queueActive(context: Context): Boolean =
+            WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(QUEUE).first()
+                .any { !it.state.isFinished }
+
+        /**
+         * 대기열이 비었는데 '대기 중'·'분석 중'으로 남은 계약서가 있으면 (앱이 강제로 꺼졌거나
+         * 예전 버전에서 대기열이 멈춘 경우) 다시 대기열에 넣는다. 앱을 열 때마다 확인한다.
+         */
+        suspend fun recoverStuck(context: Context, force: Boolean = false): Int {
+            if (!force && queueActive(context)) return 0
+            val stuck = ContractRepository.allContracts()
+                .filter { it.status == ContractStatus.PENDING || it.status == ContractStatus.PROCESSING }
+                .sortedBy { it.createdAt }
+            if (force) WorkManager.getInstance(context).cancelUniqueWork(QUEUE)
+            stuck.forEach { enqueue(context, it.id) }
+            return stuck.size
         }
     }
 }

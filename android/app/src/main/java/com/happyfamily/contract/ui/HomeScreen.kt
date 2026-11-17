@@ -107,6 +107,10 @@ fun HomeScreen(
         onSignOut = { confirmSignOut = true },
         onOpenFolder = onOpenFolder,
         onOpenContract = onOpenContract,
+        onRestartAnalysis = {
+            viewModel.restartAnalysis()
+            scope.launch { snackbar.showSnackbar("분석을 처음부터 다시 시작했어요.") }
+        },
     )
 
     if (confirmSignOut) {
@@ -142,6 +146,7 @@ internal fun HomeContent(
     onSignOut: () -> Unit,
     onOpenFolder: (String) -> Unit,
     onOpenContract: (String) -> Unit,
+    onRestartAnalysis: () -> Unit = {},
 ) {
     Scaffold(
         containerColor = Color.Transparent,
@@ -218,7 +223,7 @@ internal fun HomeContent(
                             verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
                             if (state.unfiled.isNotEmpty()) {
-                                sectionHeader("분석 중인 계약서", state.unfiled.size)
+                                sectionHeader("분석 중인 계약서", state.unfiled.size, actionLabel = "분석 다시 시작", onAction = onRestartAnalysis)
                                 items(state.unfiled, key = { "c-" + it.id }) { c ->
                                     ContractCard(c, onClick = { onOpenContract(c.id) })
                                 }
@@ -297,12 +302,19 @@ private fun StakeholderChips(
     }
 }
 
-private fun LazyListScope.sectionHeader(title: String, count: Int) {
+private fun LazyListScope.sectionHeader(
+    title: String,
+    count: Int,
+    actionLabel: String? = null,
+    onAction: () -> Unit = {},
+) {
     item(key = "h-$title") {
-        Row(Modifier.padding(top = 10.dp, start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp, start = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(title, color = Brand.Navy, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(6.dp))
             Text("$count", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            if (actionLabel != null) TextButton(onClick = onAction) { Text(actionLabel) }
         }
     }
 }
