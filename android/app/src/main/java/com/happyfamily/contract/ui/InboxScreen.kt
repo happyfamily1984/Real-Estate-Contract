@@ -1,0 +1,316 @@
+package com.happyfamily.contract.ui
+
+import android.app.Application
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.ZoomIn
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil3.compose.AsyncImage
+import com.happyfamily.contract.data.Contract
+import com.happyfamily.contract.data.ContractRepository
+import com.happyfamily.contract.data.ContractStatus
+import com.happyfamily.contract.data.Folder
+import com.happyfamily.contract.data.FolderRepository
+import com.happyfamily.contract.data.Glance
+import com.happyfamily.contract.data.SummaryText
+import com.happyfamily.contract.data.formatShortDate
+import com.happyfamily.contract.ui.theme.Brand
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+class InboxViewModel(application: Application) : AndroidViewModel(application) {
+    /** 아직 폴더를 확인하지 않은 새로 올린 계약서 (올린 순서). null 이면 불러오는 중 */
+    val contracts: StateFlow<List<Contract>?> = ContractRepository.contractsFlow()
+        .map { list -> list.filter { !it.confirmed }.sortedBy { it.createdAt } }
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val folders: StateFlow<List<Folder>> = FolderRepository.foldersFlow()
+        .catch { emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val message = MutableStateFlow<String?>(null)
+
+    fun move(contracts: List<Contract>, target: String?, newName: String) = viewModelScope.launch {
+        try {
+            val (_, name) = FolderRepository.moveContracts(getApplication(), contracts, target, newName)
+            message.value = "${contracts.size}건을 '$name' 폴더로 옮겼어요."
+        } catch (e: Exception) {
+            message.value = "옮기지 못했습니다: ${friendlyError(e)}"
+        }
+    }
+
+    fun confirm(contracts: List<Contract>) = viewModelScope.launch {
+        try {
+            ContractRepository.confirmAll(contracts.map { it.id })
+            message.value = "${contracts.size}건을 지금 폴더 그대로 확인했어요."
+        } catch (e: Exception) {
+            message.value = friendlyError(e)
+        }
+    }
+}
+
+/**
+ * 새로 올린 계약서 정리: 여러 파일을 올렸을 때 하나씩(또는 여러 개 골라) 원하는 폴더로 옮긴다.
+ * 옮기거나 확인하면 목록에서 사라진다. 사진을 누르면 크게 보며 내용을 다시 확인할 수 있다.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InboxScreen(
+    onBack: () -> Unit,
+    onPreview: (contractId: String) -> Unit,
+    onOpenContract: (contractId: String) -> Unit,
+    vm: InboxViewModel = viewModel(),
+) {
+    val contracts by vm.contracts.collectAsStateWithLifecycle()
+    val folders by vm.folders.collectAsStateWithLifecycle()
+    val message by vm.message.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    /** 폴더 고르기 창을 띄울 대상 */
+    var moving by remember { mutableStateOf<List<Contract>?>(null) }
+
+    LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); vm.message.value = null } }
+    // 목록에서 사라진 것은 선택에서도 뺀다.
+    LaunchedEffect(contracts) { contracts?.let { list -> selected = selected.filter { id -> list.any { it.id == id } }.toSet() } }
+
+    val folderName: (String?) -> String? = { id -> folders.firstOrNull { it.id == id }?.name }
+
+    Scaffold(
+        containerColor = Color.Transparent,
+        modifier = Modifier.background(Brand.ScreenGradient),
+        topBar = {
+            TopAppBar(
+                title = { Text("새로 올린 계약서 정리", fontWeight = FontWeight.Bold) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "뒤로") }
+                },
+                actions = {
+                    val list = contracts.orEmpty()
+                    if (list.isNotEmpty()) {
+                        TextButton(onClick = {
+                            selected = if (selected.size == list.size) emptySet() else list.map { it.id }.toSet()
+                        }) { Text(if (selected.size == list.size) "선택 해제" else "모두 선택") }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, titleContentColor = Brand.Navy),
+            )
+        },
+        bottomBar = {
+            if (selected.isNotEmpty()) {
+                val chosen = contracts.orEmpty().filter { it.id in selected }
+                Row(
+                    Modifier.fillMaxWidth().background(Color.White).navigationBarsPadding().padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedButton(onClick = { vm.confirm(chosen.filter { it.folderId != null }) }, modifier = Modifier.weight(1f)) {
+                        Text("이대로 확인 (${chosen.count { it.folderId != null }})")
+                    }
+                    Button(onClick = { moving = chosen }, modifier = Modifier.weight(1f)) { Text("폴더로 옮기기 (${chosen.size})") }
+                }
+            }
+        },
+        snackbarHost = { SnackbarHost(snackbar) },
+    ) { padding ->
+        val list = contracts
+        when {
+            list == null -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            list.isEmpty() -> Box(Modifier.fillMaxSize().padding(padding)) {
+                CenterText("정리할 새 계약서가 없어요.\n모두 폴더에 들어갔습니다.")
+            }
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                item {
+                    Text(
+                        "AI 가 같은 부동산 폴더를 제안해 두었어요. 맞으면 '이대로 확인', 다르면 '폴더 옮기기'를 누르세요. 처리한 계약서는 목록에서 사라집니다. 사진을 누르면 크게 볼 수 있어요.",
+                        color = Brand.TextSub,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                }
+                items(list, key = { it.id }) { c ->
+                    InboxCard(
+                        contract = c,
+                        suggested = folderName(c.folderId),
+                        selected = c.id in selected,
+                        onToggle = { selected = if (c.id in selected) selected - c.id else selected + c.id },
+                        onPreview = { onPreview(c.id) },
+                        onOpen = { onOpenContract(c.id) },
+                        onConfirm = { vm.confirm(listOf(c)) },
+                        onMove = { moving = listOf(c) },
+                    )
+                }
+            }
+        }
+    }
+
+    moving?.let { targets ->
+        FolderPickerDialog(
+            title = if (targets.size == 1) "어느 폴더로 옮길까요?" else "${targets.size}건을 어느 폴더로 옮길까요?",
+            folders = folders,
+            currentFolderId = targets.map { it.folderId }.distinct().singleOrNull(),
+            suggestedNewName = targets.firstNotNullOfOrNull { it.analysis?.folderName?.takeIf { n -> n.isNotBlank() } }.orEmpty(),
+            onDismiss = { moving = null },
+            onPick = { target, newName ->
+                moving = null
+                selected = selected - targets.map { it.id }.toSet()
+                vm.move(targets, target, newName)
+            },
+        )
+    }
+}
+
+@Composable
+internal fun InboxCard(
+    contract: Contract,
+    suggested: String?,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onPreview: () -> Unit,
+    onOpen: () -> Unit,
+    onConfirm: () -> Unit,
+    onMove: () -> Unit,
+) {
+    Card(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = if (selected) Brand.CardTint else Color.White),
+        border = if (selected) BorderStroke(2.dp, Brand.Blue) else null,
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                Icon(
+                    if (selected) Icons.Filled.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                    contentDescription = "선택",
+                    tint = if (selected) Brand.Blue else Brand.Divider,
+                    modifier = Modifier.size(28.dp).clickable(onClick = onToggle),
+                )
+                Spacer(Modifier.width(8.dp))
+                // 큰 사진으로 보기
+                Box(
+                    Modifier
+                        .size(width = 84.dp, height = 112.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Brand.CardTint)
+                        .clickable(onClick = onPreview),
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    contract.thumbnail?.let {
+                        AsyncImage(model = it, contentDescription = "크게 보기", modifier = Modifier.fillMaxSize(),
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                    }
+                    Icon(
+                        Icons.Outlined.ZoomIn, contentDescription = null, tint = Color.White,
+                        modifier = Modifier.padding(4.dp).background(Brand.Navy.copy(alpha = 0.5f), RoundedCornerShape(6.dp)).padding(2.dp).size(18.dp),
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f).clickable(onClick = onOpen)) {
+                    val a = contract.analysis
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (contract.contractType.isNotBlank()) {
+                            Badge(SummaryText.kindLabel(contract.contractType), Brand.Violet)
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text("${contract.pageCount}페이지", color = Brand.TextSub, fontSize = 12.sp)
+                    }
+                    Text(
+                        contract.title.ifBlank { "분석 중인 계약서" },
+                        color = Brand.Navy,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (a != null) {
+                        if (a.contractDate.isNotBlank()) Text("계약 ${formatShortDate(a.contractDate)}", color = Brand.TextSub, fontSize = 12.sp)
+                        val money = Glance.amounts(a).joinToString(" · ") { (l, v) -> "$l $v" }
+                        if (money.isNotBlank()) Text(money, color = Brand.Blue, fontSize = 13.sp)
+                        Glance.parties(a)?.let { Text(it, color = Brand.TextSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    } else {
+                        Text(
+                            if (contract.status == ContractStatus.ERROR) "분석 실패 — 눌러서 확인" else "AI 가 분석하고 있어요",
+                            color = Brand.TextSub,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (suggested != null) "제안 폴더: $suggested" else "폴더 미정",
+                    color = if (suggested != null) Brand.Navy else Brand.TextSub,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (suggested != null) TextButton(onClick = onConfirm) { Text("이대로 확인") }
+                TextButton(onClick = onMove) { Text("폴더 옮기기") }
+            }
+        }
+    }
+}

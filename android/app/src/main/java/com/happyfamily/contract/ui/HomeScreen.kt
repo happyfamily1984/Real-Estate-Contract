@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Groups
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.ViewAgenda
 import androidx.compose.material.icons.outlined.ArrowDownward
@@ -84,6 +85,7 @@ fun HomeScreen(
     onOpenStakeholders: () -> Unit,
     onOpenAiSettings: () -> Unit = {},
     onOpenSchedule: () -> Unit = {},
+    onOpenInbox: () -> Unit = {},
     viewModel: HomeViewModel = viewModel(),
     importVm: ImportViewModel = viewModel(),
 ) {
@@ -127,6 +129,7 @@ fun HomeScreen(
         onStakeholders = onOpenStakeholders,
         onAiSettings = onOpenAiSettings,
         onSchedule = onOpenSchedule,
+        onInbox = onOpenInbox,
         viewMode = viewMode,
         onViewMode = viewModel::setViewMode,
         sortMode = sortMode,
@@ -196,6 +199,7 @@ internal fun HomeContent(
     onStakeholders: () -> Unit,
     onAiSettings: () -> Unit = {},
     onSchedule: () -> Unit = {},
+    onInbox: () -> Unit = {},
     viewMode: ViewMode = ViewMode.CARD,
     onViewMode: (ViewMode) -> Unit = {},
     sortMode: SortMode = SortMode.NAME,
@@ -302,6 +306,28 @@ internal fun HomeContent(
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
                         )
                     } else {
+                        if (state.inboxCount > 0) {
+                            // 새로 올린 계약서를 폴더로 정리하라는 안내
+                            Row(
+                                Modifier
+                                    .padding(horizontal = 20.dp, vertical = 4.dp)
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(Brand.Blue)
+                                    .clickable(onClick = onInbox)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    "새로 올린 계약서 ${state.inboxCount}건 · 폴더 확인·정리하기",
+                                    color = Color.White,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = Color.White)
+                            }
+                        }
                         StakeholderChips(state, stakeholderFilter, onStakeholderFilter, onStakeholders)
                     }
                     val nothing = state.unfiled.isEmpty() && state.ongoing.isEmpty() && state.done.isEmpty()

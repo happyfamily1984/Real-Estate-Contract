@@ -201,6 +201,38 @@ object FolderRepository {
         return newId
     }
 
+    /**
+     * 계약서들을 [targetId] 폴더로 옮긴다. [targetId] 가 null 이면 [newFolderName] 으로 새 폴더를 만든다.
+     * 옮긴 폴더와 원래 폴더의 정리를 다시 만들도록 예약한다. (옮긴 폴더 id, 이름) 을 돌려준다.
+     */
+    suspend fun moveContracts(
+        context: Context,
+        contracts: List<Contract>,
+        targetId: String?,
+        newFolderName: String = "",
+    ): Pair<String, String> {
+        require(contracts.isNotEmpty()) { "옮길 계약서를 골라 주세요." }
+        val first = contracts.firstOrNull { it.analysis != null } ?: contracts.first()
+        val (folderId, folderName) = if (targetId != null) {
+            targetId to (get(targetId)?.name ?: "")
+        } else {
+            val name = newFolderName.trim().ifBlank { first.analysis?.folderName.orEmpty() }.ifBlank { "새 계약 폴더" }
+            createFolder(
+                name = name,
+                address = first.analysis?.propertyAddress.orEmpty(),
+                stakeholder = Stakeholders.join(
+                    Stakeholders.matching(allStakeholders().map { it.name }, contracts.mapNotNull { it.analysis }),
+                ),
+                thumbnail = first.thumbnail,
+            ) to name
+        }
+        ContractRepository.setFolderAll(contracts.map { it.id }, folderId)
+        (contracts.mapNotNull { it.folderId } + folderId).distinct().forEach {
+            SummaryWorker.enqueue(context, it, force = false, delaySeconds = 3)
+        }
+        return folderId to folderName
+    }
+
     // ---------- 이해관계자 ----------
 
     suspend fun allStakeholders(): List<Stakeholder> =

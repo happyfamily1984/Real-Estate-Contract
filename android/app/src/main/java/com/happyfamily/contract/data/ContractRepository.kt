@@ -154,6 +154,8 @@ object ContractRepository {
                 put("memo", "")
                 put("title", "분석 중인 계약서")
                 if (folderId != null) put("folderId", folderId)
+                // 폴더 안에서 올렸으면 이미 확인된 것, 아니면 '새로 올린 계약서 정리'에서 확인
+                put("confirmed", folderId != null)
                 put("createdAt", FieldValue.serverTimestamp())
                 put("updatedAt", FieldValue.serverTimestamp())
             },
@@ -221,7 +223,7 @@ object ContractRepository {
         ).await()
     }
 
-    /** 여러 계약서를 한 번에(모두 되거나 모두 안 되게) 다른 폴더로 옮긴다. */
+    /** 여러 계약서를 한 번에(모두 되거나 모두 안 되게) 다른 폴더로 옮긴다. 옮긴 계약서는 확인된 것으로 표시. */
     suspend fun setFolderAll(ids: Collection<String>, folderId: String) {
         val uid = uid()
         ids.chunked(400).forEach { chunk ->
@@ -229,9 +231,19 @@ object ContractRepository {
             chunk.forEach { id ->
                 batch.update(
                     contracts(uid).document(id),
-                    mapOf("folderId" to folderId, "updatedAt" to FieldValue.serverTimestamp()),
+                    mapOf("folderId" to folderId, "confirmed" to true, "updatedAt" to FieldValue.serverTimestamp()),
                 )
             }
+            batch.commit().await()
+        }
+    }
+
+    /** 새로 올린 계약서를 지금 폴더 그대로 확인 처리 */
+    suspend fun confirmAll(ids: Collection<String>) {
+        val uid = uid()
+        ids.chunked(400).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { id -> batch.update(contracts(uid).document(id), "confirmed", true) }
             batch.commit().await()
         }
     }

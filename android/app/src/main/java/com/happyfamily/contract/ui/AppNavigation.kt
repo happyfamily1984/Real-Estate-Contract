@@ -34,6 +34,14 @@ fun AppNavigation() {
                     onOpenStakeholders = { nav.navigate("stakeholders") },
                     onOpenAiSettings = { nav.navigate("ai-settings") },
                     onOpenSchedule = { nav.navigate("schedule") },
+                    onOpenInbox = { nav.navigate("inbox") },
+                )
+            }
+            composable("inbox") {
+                InboxScreen(
+                    onBack = { nav.popBackStack() },
+                    onPreview = { id -> nav.navigate("photo/$id/0") },
+                    onOpenContract = { id -> nav.navigate("detail/$id") },
                 )
             }
             composable("schedule") {

@@ -86,6 +86,7 @@ fun ContractDetailScreen(
     val foldersFlow = remember { FolderRepository.foldersFlow() }
     val folders by foldersFlow.collectAsStateWithLifecycle(initialValue = emptyList())
     var moving by remember { mutableStateOf(false) }
+    var moveMessage by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var confirmDelete by remember { mutableStateOf(false) }
@@ -144,6 +145,7 @@ fun ContractDetailScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             actionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            moveMessage?.let { Text(it, color = Brand.Blue, fontWeight = FontWeight.SemiBold) }
 
             PhotoStrip(contract, onOpenPhoto)
 
@@ -211,33 +213,19 @@ fun ContractDetailScreen(
     }
 
     if (moving && contract != null) {
-        MoveDialog(
-            contract = contract,
+        FolderPickerDialog(
+            title = "폴더 옮기기",
             folders = folders,
+            currentFolderId = contract.folderId,
+            suggestedNewName = contract.analysis?.folderName.orEmpty(),
             onDismiss = { moving = false },
-            onMove = { target ->
+            onPick = { target, newName ->
                 moving = false
+                if (target != null && target == contract.folderId) return@FolderPickerDialog
                 scope.launch {
-                    runCatching {
-                        val old = contract.folderId
-                        val a = contract.analysis
-                        val newId = target ?: FolderRepository.createFolder(
-                            name = a?.folderName?.ifBlank { null } ?: "새 계약 폴더",
-                            address = a?.propertyAddress.orEmpty(),
-                            stakeholder = com.happyfamily.contract.data.Stakeholders.join(
-                                com.happyfamily.contract.data.Stakeholders.matching(
-                                    FolderRepository.allStakeholders().map { it.name },
-                                    listOfNotNull(a),
-                                ),
-                            ),
-                            thumbnail = contract.thumbnail,
-                        )
-                        if (newId != old) {
-                            ContractRepository.setFolder(contract.id, newId)
-                            SummaryWorker.enqueue(context, newId, force = false)
-                            old?.let { SummaryWorker.enqueue(context, it, force = false) }
-                        }
-                    }.onFailure { actionError = "옮기지 못했습니다: ${it.message}" }
+                    runCatching { FolderRepository.moveContracts(context, listOf(contract), target, newName) }
+                        .onSuccess { (_, name) -> actionError = null; moveMessage = "'$name' 폴더로 옮겼어요." }
+                        .onFailure { actionError = "옮기지 못했습니다: ${friendlyError(it)}" }
                 }
             },
         )
@@ -293,39 +281,6 @@ private fun FolderRow(folder: Folder?, analyzing: Boolean, onOpen: () -> Unit, o
             TextButton(onClick = onMove, enabled = !analyzing) { Text("옮기기") }
         }
     }
-}
-
-/** 계약서를 다른 폴더(또는 새 폴더)로 옮긴다. */
-@Composable
-private fun MoveDialog(
-    contract: Contract,
-    folders: List<Folder>,
-    onDismiss: () -> Unit,
-    onMove: (folderId: String?) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("폴더 옮기기") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                folders.sortedBy { it.name }.forEach { f ->
-                    Row(
-                        Modifier.fillMaxWidth().clickable { onMove(f.id) }.padding(vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = f.id == contract.folderId, onClick = { onMove(f.id) })
-                        Column {
-                            Text(f.name)
-                            if (f.address.isNotBlank()) Text(f.address, color = Brand.TextSub, fontSize = 12.sp)
-                        }
-                    }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                TextButton(onClick = { onMove(null) }) { Text("+ 새 폴더 만들어 옮기기") }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
-    )
 }
 
 @Composable

@@ -55,6 +55,21 @@ class ScreenshotTest {
     fun homeGrid() = shot("home_grid.png") { Home(SampleData.homeState(), viewMode = ViewMode.GRID) }
 
     @Test
+    fun inbox() = shot("inbox.png") {
+        androidx.compose.foundation.lazy.LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp)) {
+            items(SampleData.gwacheon.size) { i ->
+                InboxCard(
+                    contract = SampleData.gwacheon[i],
+                    suggested = if (i == 2) null else "과천 미소가",
+                    selected = i == 1,
+                    onToggle = {}, onPreview = {}, onOpen = {}, onConfirm = {}, onMove = {},
+                )
+                androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.padding(5.dp))
+            }
+        }
+    }
+
+    @Test
     fun homeMerge() = shot("home_merge.png") { Home(SampleData.homeState(), selecting = setOf("f1", "f2")) }
 
     @Test

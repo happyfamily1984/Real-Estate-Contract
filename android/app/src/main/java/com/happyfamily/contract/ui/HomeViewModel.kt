@@ -30,6 +30,8 @@ data class HomeState(
     val contractCounts: Map<String, Int>,
     val stakeholders: List<Stakeholder>,
     val isEmpty: Boolean,
+    /** 폴더를 아직 확인하지 않은 새로 올린 계약서 수 */
+    val inboxCount: Int = 0,
 )
 
 /** 홈 화면 보기 방식 */
@@ -134,6 +136,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             contractCounts = counts,
             stakeholders = stakeholders,
             isEmpty = folders.isEmpty() && contracts.isEmpty(),
+            inboxCount = contracts.count { !it.confirmed },
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
