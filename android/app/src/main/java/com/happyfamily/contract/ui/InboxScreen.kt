@@ -317,7 +317,10 @@ internal fun InboxCard(
                 Column(Modifier.weight(1f)) {
                     val a = contract.analysis
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (contract.contractType.isNotBlank()) {
+                        if (contract.isRelated) {
+                            Badge("관련서류", Brand.TextSub)
+                            Spacer(Modifier.width(6.dp))
+                        } else if (contract.contractType.isNotBlank()) {
                             Badge(SummaryText.kindLabel(contract.contractType), Brand.Violet)
                             Spacer(Modifier.width(6.dp))
                         }
@@ -336,6 +339,8 @@ internal fun InboxCard(
                         val money = Glance.amounts(a).joinToString(" · ") { (l, v) -> "$l $v" }
                         if (money.isNotBlank()) Text(money, color = Brand.Blue, fontSize = 13.sp)
                         Glance.parties(a)?.let { Text(it, color = Brand.TextSub, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    } else if (contract.isRelated) {
+                        Text("계약관련서류 (AI 분석 안 함) — '다른 폴더로 옮기기'로 넣어 주세요", color = Brand.TextSub, fontSize = 12.sp)
                     } else {
                         Text(
                             if (contract.status == ContractStatus.ERROR) "분석 실패 — 눌러서 확인" else "AI 가 분석하고 있어요",

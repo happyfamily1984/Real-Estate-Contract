@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.SwapVert
@@ -121,6 +122,9 @@ fun FolderScreen(
         onBack = onBack,
         onScan = importer.scan,
         onPickFiles = importer.pickFiles,
+        onScanRelated = importer.scanRelated,
+        onPickRelated = importer.pickRelated,
+        onMarkRelated = vm::markRelated,
         onToggleSort = { vm.newestFirst.value = !newestFirst },
         onRename = vm::rename,
         onSetStatus = vm::setStatus,
@@ -164,7 +168,15 @@ internal fun FolderContent(
     onMergeContracts: (List<Contract>) -> Unit = {},
     allFolders: List<Folder> = emptyList(),
     onMoveContracts: (List<Contract>, String?, String) -> Unit = { _, _, _ -> },
+    onScanRelated: () -> Unit = {},
+    onPickRelated: () -> Unit = {},
+    onMarkRelated: (List<Contract>) -> Unit = {},
 ) {
+    // 계약서와 계약관련서류(채권채무존재확인서 등, AI 분석 안 함)를 따로 보여 준다.
+    val mainContracts = contracts.filter { !it.isRelated }
+    val relatedDocs = contracts.filter { it.isRelated }
+    var addingRelated by remember { mutableStateOf(false) }
+    var confirmMarkRelated by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     /** null 이면 보통 화면, 아니면 분리하려고 고른 계약서 id 들 */
     var selecting by remember { mutableStateOf<Set<String>?>(null) }
@@ -205,7 +217,12 @@ internal fun FolderContent(
                         fontSize = 13.sp,
                         lineHeight = 18.sp,
                     )
-                    Spacer(Modifier.height(8.dp))
+                    val canMark = sel.any { id -> mainContracts.any { it.id == id } }
+                    TextButton(onClick = { confirmMarkRelated = true }, enabled = canMark) {
+                        Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("계약서가 아니면: 계약관련서류로 바꾸기")
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         WhitePillButton(text = "취소", icon = Icons.Outlined.Close, onClick = { selecting = null }, height = 50.dp)
                         WhitePillButton(
@@ -253,6 +270,7 @@ internal fun FolderContent(
                 )
             }
             item {
+              Column {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                     WhitePillButton(
                         text = "파일 업로드",
@@ -271,6 +289,16 @@ internal fun FolderContent(
                         modifier = Modifier.weight(1f),
                     )
                 }
+                TextButton(
+                    onClick = { addingRelated = true },
+                    enabled = upload == null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("＋ 계약관련서류 올리기 (AI 분석 안 함)")
+                }
+              }
             }
             item {
                 SummaryCard(
@@ -294,7 +322,7 @@ internal fun FolderContent(
                 Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("계약서", color = Brand.Navy, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(6.dp))
-                    Text("${contracts.size}", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Text("${mainContracts.size}", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.weight(1f))
                     if (selecting == null && contracts.isNotEmpty()) {
                         TextButton(onClick = { selecting = emptySet() }) { Text("골라서 옮기기·합치기") }
@@ -306,7 +334,7 @@ internal fun FolderContent(
                     }
                 }
             }
-            items(contracts, key = { it.id }) { c ->
+            items(mainContracts, key = { it.id }) { c ->
                 val toggle = { selecting = selecting?.let { if (c.id in it) it - c.id else it + c.id } }
                 ContractCard(
                     contract = c,
@@ -317,9 +345,81 @@ internal fun FolderContent(
                     selected = selecting?.contains(c.id),
                 )
             }
+            if (relatedDocs.isNotEmpty()) {
+                item {
+                    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("계약관련서류", color = Brand.Navy, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(6.dp))
+                            Text("${relatedDocs.size}", color = Brand.Blue, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Text(
+                            "채권채무존재확인서 등 계약서가 아닌 서류. AI 분석·계약내용정리·일정에 들어가지 않습니다.",
+                            color = Brand.TextSub,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp,
+                        )
+                    }
+                }
+                items(relatedDocs, key = { it.id }) { c ->
+                    val toggle = { selecting = selecting?.let { if (c.id in it) it - c.id else it + c.id } }
+                    ContractCard(
+                        contract = c,
+                        onClick = { if (selecting != null) toggle() else onOpenContract(c.id) },
+                        onLongClick = { if (selecting == null) selecting = setOf(c.id) else toggle() },
+                        selected = selecting?.contains(c.id),
+                    )
+                }
+            }
         }
     }
 
+    if (folder != null && addingRelated) {
+        AlertDialog(
+            onDismissRequest = { addingRelated = false },
+            title = { Text("계약관련서류 올리기") },
+            text = {
+                Text(
+                    "채권채무존재확인서처럼 계약서가 아닌 서류를 이 폴더에 보관합니다. AI 분석은 하지 않고, 이름은 나중에 직접 고칠 수 있어요.",
+                    color = Brand.TextSub,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { addingRelated = false; onPickRelated() }) { Text("파일에서 고르기") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { addingRelated = false }) { Text("닫기") }
+                    TextButton(onClick = { addingRelated = false; onScanRelated() }) { Text("촬영하기") }
+                }
+            },
+        )
+    }
+    if (folder != null && confirmMarkRelated) {
+        val chosen = mainContracts.filter { it.id in selecting.orEmpty() }
+        AlertDialog(
+            onDismissRequest = { confirmMarkRelated = false },
+            title = { Text("${chosen.size}건을 계약관련서류로 바꿀까요?") },
+            text = {
+                Text(
+                    "AI 분석 결과를 지우고 계약내용정리·향후 일정에서 뺍니다. 사진은 그대로 남고, 나중에 다시 '계약서로 바꾸기'를 할 수 있어요.",
+                    color = Brand.TextSub,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmMarkRelated = false
+                    selecting = null
+                    onMarkRelated(chosen)
+                }) { Text("바꾸기") }
+            },
+            dismissButton = { TextButton(onClick = { confirmMarkRelated = false }) { Text("취소") } },
+        )
+    }
     if (folder != null && mergingContracts) {
         // 고른 순서 그대로 (먼저 고른 계약서가 앞 페이지)
         val chosen = selecting.orEmpty().mapNotNull { id -> contracts.firstOrNull { it.id == id } }

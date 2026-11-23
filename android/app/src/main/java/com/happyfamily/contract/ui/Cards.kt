@@ -360,7 +360,10 @@ fun ContractCard(
             Column(Modifier.weight(1f)) {
                 val a = contract.analysis
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (contract.contractType.isNotBlank()) {
+                    if (contract.isRelated) {
+                        Badge("관련서류", Brand.TextSub)
+                        Spacer(Modifier.width(8.dp))
+                    } else if (contract.contractType.isNotBlank()) {
                         Badge(SummaryText.kindLabel(contract.contractType), Brand.Violet)
                         Spacer(Modifier.width(8.dp))
                     }
@@ -419,7 +422,15 @@ fun ContractCard(
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
-                    ContractStatus.DONE -> a?.let { an ->
+                    ContractStatus.DONE -> if (contract.isRelated) {
+                        Text(
+                            "${contract.pageCount}페이지" + contract.memo.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
+                            color = Brand.TextSub,
+                            fontSize = 13.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else a?.let { an ->
                         // 계약기간, 금액, 계약자
                         if (an.leaseStart.isNotBlank() || an.leaseEnd.isNotBlank()) {
                             Text(

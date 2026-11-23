@@ -12,7 +12,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -32,7 +35,7 @@ import kotlinx.coroutines.withContext
 data class UploadState(val done: Int, val total: Int, val detail: String = "")
 
 /** 사진이 여러 장일 때 어떻게 묶을지 물어보는 중인 업로드 */
-data class PendingImport(val pdfs: List<Uri>, val images: List<Uri>, val folderId: String?)
+data class PendingImport(val pdfs: List<Uri>, val images: List<Uri>, val folderId: String?, val related: Boolean = false)
 
 /** 계약서 사진·PDF 를 저장하는 일. 화면을 돌려도 이어지도록 ViewModel 에 둔다. */
 class ImportViewModel(application: Application) : AndroidViewModel(application) {
@@ -46,9 +49,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     val pending: StateFlow<PendingImport?> = _pending.asStateFlow()
 
     /** 스캐너로 찍은 페이지들 → 계약서 한 건 */
-    fun uploadScan(pages: List<Uri>, folderId: String?, onCreated: (String) -> Unit) {
+    fun uploadScan(pages: List<Uri>, folderId: String?, onCreated: (String) -> Unit, related: Boolean = false) {
         if (pages.isEmpty()) return
-        start(listOf(pages), folderId, onCreated)
+        start(listOf(pages), folderId, onCreated, related)
     }
 
     /**
@@ -58,7 +61,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     /** 여러 건을 올렸을 때 (폴더 밖에서) — 정리 화면으로 보낸다 */
     var onCreatedMany: (() -> Unit)? = null
 
-    fun uploadFiles(files: List<Uri>, folderId: String?, onCreated: (String) -> Unit) {
+    fun uploadFiles(files: List<Uri>, folderId: String?, onCreated: (String) -> Unit, related: Boolean = false) {
         if (files.isEmpty() || _upload.value != null) return
         val app = getApplication<Application>()
         viewModelScope.launch {
@@ -75,9 +78,9 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
                 return@launch
             }
             if (images.size > 1) {
-                _pending.value = PendingImport(pdfs, images, folderId)
+                _pending.value = PendingImport(pdfs, images, folderId, related)
             } else {
-                start(pdfs.map { listOf(it) } + images.map { listOf(it) }, folderId, onCreated)
+                start(pdfs.map { listOf(it) } + images.map { listOf(it) }, folderId, onCreated, related)
             }
         }
     }
@@ -92,15 +95,15 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
         } else {
             p.images.map { listOf(it) }
         }
-        start(p.pdfs.map { listOf(it) } + imageGroups, p.folderId, onCreated)
+        start(p.pdfs.map { listOf(it) } + imageGroups, p.folderId, onCreated, p.related)
     }
 
     fun cancelPending() {
         _pending.value = null
     }
 
-    /** 묶음 하나가 계약서 한 건. 차례로 저장하고 분석 대기열에 넣는다. */
-    private fun start(groups: List<List<Uri>>, folderId: String?, onCreated: (String) -> Unit) {
+    /** 묶음 하나가 계약서 한 건. 차례로 저장하고 분석 대기열에 넣는다. [related] 면 계약관련서류로 분석 없이 저장. */
+    private fun start(groups: List<List<Uri>>, folderId: String?, onCreated: (String) -> Unit, related: Boolean = false) {
         if (groups.isEmpty() || _upload.value != null) return
         val app = getApplication<Application>()
         _upload.value = UploadState(0, groups.size)
@@ -110,7 +113,7 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             groups.forEachIndexed { index, group ->
                 val name = if (group.size == 1) ContractRepository.fileName(app, group[0]) else "사진 ${group.size}장"
                 try {
-                    created += ContractRepository.createContract(app, group, folderId) { pageDone, pageTotal ->
+                    created += ContractRepository.createContract(app, group, folderId, related) { pageDone, pageTotal ->
                         _upload.value = UploadState(index, groups.size, "$name · $pageDone/${pageTotal}페이지")
                     }
                 } catch (e: Exception) {
@@ -119,6 +122,10 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
             }
             _upload.value = null
             when {
+                related && created.isNotEmpty() -> _message.value = buildString {
+                    append("계약관련서류 ${created.size}건을 저장했어요. (AI 분석 안 함)")
+                    if (failed.isNotEmpty()) append(" 실패 ${failed.size}건: ").append(failed.take(3).joinToString(" / "))
+                }
                 created.size == 1 && failed.isEmpty() -> onCreated(created[0])
                 created.size > 1 && folderId == null && onCreatedMany != null -> {
                     onCreatedMany?.invoke()
@@ -142,7 +149,13 @@ class ImportViewModel(application: Application) : AndroidViewModel(application) 
     }
 }
 
-class Importer(val scan: () -> Unit, val pickFiles: () -> Unit)
+class Importer(
+    val scan: () -> Unit,
+    val pickFiles: () -> Unit,
+    /** 계약관련서류(AI 분석 안 함)로 촬영·파일 올리기 */
+    val scanRelated: () -> Unit = {},
+    val pickRelated: () -> Unit = {},
+)
 
 /**
  * 계약서를 들여오는 두 가지 방법.
@@ -152,6 +165,8 @@ class Importer(val scan: () -> Unit, val pickFiles: () -> Unit)
 @Composable
 fun rememberImporter(vm: ImportViewModel, folderId: String?, onCreated: (String) -> Unit): Importer {
     val activity = LocalContext.current as Activity
+    // 지금 여는 촬영·파일 고르기가 계약관련서류용인지
+    var relatedMode by rememberSaveable { mutableStateOf(false) }
 
     val scannerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
@@ -159,34 +174,35 @@ fun rememberImporter(vm: ImportViewModel, folderId: String?, onCreated: (String)
         if (result.resultCode == Activity.RESULT_OK) {
             val pages = GmsDocumentScanningResult.fromActivityResultIntent(result.data)
                 ?.pages?.map { it.imageUri }.orEmpty()
-            vm.uploadScan(pages, folderId, onCreated)
+            vm.uploadScan(pages, folderId, onCreated, relatedMode)
         }
     }
     val fileLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments(),
-    ) { uris -> vm.uploadFiles(uris, folderId, onCreated) }
+    ) { uris -> vm.uploadFiles(uris, folderId, onCreated, relatedMode) }
 
     // 사진 여러 장을 골랐을 때: 한 계약서로 묶을지 물어본다.
     val pending by vm.pending.collectAsStateWithLifecycle()
     pending?.let { p ->
+        val noun = if (p.related) "서류" else "계약서"
         AlertDialog(
             onDismissRequest = vm::cancelPending,
             title = { Text("사진 ${p.images.size}장을 어떻게 올릴까요?") },
             text = {
                 Column {
-                    Text("한 계약서의 여러 페이지라면 '한 계약서로 묶기', 서로 다른 서류라면 '사진마다 따로'를 고르세요.")
+                    Text("한 ${noun}의 여러 페이지라면 '한 ${noun}로 묶기', 서로 다른 서류라면 '사진마다 따로'를 고르세요.")
                     if (p.pdfs.isNotEmpty()) Text("\nPDF ${p.pdfs.size}개는 파일마다 따로 올라갑니다.")
                 }
             },
-            confirmButton = { TextButton(onClick = { vm.resolvePending(true, onCreated) }) { Text("한 계약서로 묶기") } },
+            confirmButton = { TextButton(onClick = { vm.resolvePending(true, onCreated) }) { Text("한 ${noun}로 묶기") } },
             dismissButton = { TextButton(onClick = { vm.resolvePending(false, onCreated) }) { Text("사진마다 따로") } },
         )
     }
 
     return remember(folderId) {
-        val pickFiles = { fileLauncher.launch(arrayOf("application/pdf", "image/*")) }
-        Importer(
-            scan = {
+        val openFiles = { fileLauncher.launch(arrayOf("application/pdf", "image/*")) }
+        val pickFiles = { relatedMode = false; openFiles() }
+        val openScanner = {
                 val options = GmsDocumentScannerOptions.Builder()
                     .setGalleryImportAllowed(true)
                     .setPageLimit(ContractRepository.MAX_PAGES)
@@ -199,10 +215,15 @@ fun rememberImporter(vm: ImportViewModel, folderId: String?, onCreated: (String)
                     }
                     .addOnFailureListener {
                         vm.showMessage("스캐너를 열 수 없어 파일 선택을 엽니다.")
-                        pickFiles()
+                        openFiles()
                     }
-            },
+            Unit
+        }
+        Importer(
+            scan = { relatedMode = false; openScanner() },
             pickFiles = pickFiles,
+            scanRelated = { relatedMode = true; openScanner() },
+            pickRelated = { relatedMode = true; openFiles() },
         )
     }
 }

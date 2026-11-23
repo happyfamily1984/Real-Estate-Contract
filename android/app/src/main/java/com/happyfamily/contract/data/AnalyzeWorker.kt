@@ -34,6 +34,7 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val upgrade = inputData.getBoolean(KEY_UPGRADE, false)
         return try {
             val contract = ContractRepository.get(id) ?: return Result.success() // 지워진 계약서
+            if (contract.isRelated) return Result.success() // 계약관련서류는 AI 분석을 하지 않는다
             if (upgrade) {
                 // 기본 분석(휴대폰)으로 끝난 계약서만 AI 로 다시 분석한다.
                 if (contract.status != ContractStatus.DONE || contract.analysis?.isLocal != true) return Result.success()
@@ -57,6 +58,8 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 LocalAnalyzer.analyze(pages)
             }
             val matchFolderId = result["matchFolderId"] as? String
+            // 분석하는 사이에 '계약관련서류로 바꾸기'를 눌렀으면 결과를 버린다.
+            if (ContractRepository.get(id)?.isRelated != false) return Result.success()
             ContractRepository.saveAnalysis(id, result - "matchFolderId")
 
             // 같은 부동산 폴더에 넣고(없으면 새로 만들고) 그 폴더의 계약내용정리를 예약한다.
@@ -135,7 +138,7 @@ class AnalyzeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         suspend fun recoverStuck(context: Context, force: Boolean = false): Int {
             if (!force && queueActive(context)) return 0
             val stuck = ContractRepository.allContracts()
-                .filter { it.status == ContractStatus.PENDING || it.status == ContractStatus.PROCESSING }
+                .filter { !it.isRelated && (it.status == ContractStatus.PENDING || it.status == ContractStatus.PROCESSING) }
                 .sortedBy { it.createdAt }
             if (force) WorkManager.getInstance(context).cancelUniqueWork(QUEUE)
             stuck.forEach { enqueue(context, it.id) }

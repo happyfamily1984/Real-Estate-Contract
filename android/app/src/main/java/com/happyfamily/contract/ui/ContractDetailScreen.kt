@@ -25,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -102,6 +104,9 @@ fun ContractDetailScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     var actionError by remember { mutableStateOf<String?>(null) }
+    var renamingDoc by remember { mutableStateOf(false) }
+    /** true: 계약관련서류로 바꾸기 확인, false: 계약서로 바꾸기 확인, null: 안 물음 */
+    var confirmKind by remember { mutableStateOf<Boolean?>(null) }
 
     val contract = loaded
 
@@ -121,7 +126,7 @@ fun ContractDetailScreen(
                     }
                 },
                 actions = {
-                    if (contract != null &&
+                    if (contract != null && !contract.isRelated &&
                         (contract.status == ContractStatus.DONE || contract.status == ContractStatus.ERROR)
                     ) {
                         IconButton(onClick = {
@@ -163,7 +168,8 @@ fun ContractDetailScreen(
                 onToggle = { i -> pageSel = (pageSel ?: emptySet()).let { if (i in it) it - i else it + i } },
             )
             // 페이지(파일) 단위로 옮기기: 하나씩 고르거나 전체
-            val busy = contract.status == ContractStatus.PENDING || contract.status == ContractStatus.PROCESSING
+            val busy = !contract.isRelated &&
+                (contract.status == ContractStatus.PENDING || contract.status == ContractStatus.PROCESSING)
             val sel = pageSel
             if (sel == null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -196,7 +202,7 @@ fun ContractDetailScreen(
             }
             FolderRow(
                 folder = folders.firstOrNull { it.id == contract.folderId },
-                analyzing = contract.status != ContractStatus.DONE && contract.status != ContractStatus.ERROR,
+                analyzing = !contract.isRelated && contract.status != ContractStatus.DONE && contract.status != ContractStatus.ERROR,
                 suggestion = suggestion,
                 onOpen = { contract.folderId?.let(onOpenFolder) },
                 onMove = { moving = true },
@@ -209,7 +215,13 @@ fun ContractDetailScreen(
                 },
             )
 
-            when (contract.status) {
+            if (contract.isRelated) {
+                RelatedDocCard(
+                    contract = contract,
+                    onRename = { renamingDoc = true },
+                    onMakeContract = { confirmKind = false },
+                )
+            } else when (contract.status) {
                 ContractStatus.PENDING, ContractStatus.PROCESSING -> {
                     val text = buildString {
                         append(
@@ -261,6 +273,15 @@ fun ContractDetailScreen(
                 }
             }
 
+            if (!contract.isRelated) {
+                // 계약서로 스캔했지만 계약서가 아닌 서류(채권채무존재확인서 등)
+                OutlinedButton(onClick = { confirmKind = true }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Outlined.Description, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("계약서가 아니면: 계약관련서류로 바꾸기")
+                }
+            }
+
             MemoSection(contract)
         }
     }
@@ -278,7 +299,11 @@ fun ContractDetailScreen(
                 pageSel = null
                 scope.launch {
                     runCatching { FolderRepository.movePages(context, contract, chosen, target, newName) }
-                        .onSuccess { actionError = null; moveMessage = "${chosen.size}장을 '$it' 폴더로 옮겼어요. 옮긴 페이지와 남은 페이지를 다시 분석합니다." }
+                        .onSuccess {
+                            actionError = null
+                            moveMessage = "${chosen.size}장을 '$it' 폴더로 옮겼어요." +
+                                if (contract.isRelated) "" else " 옮긴 페이지와 남은 페이지를 다시 분석합니다."
+                        }
                         .onFailure { actionError = "옮기지 못했습니다: ${friendlyError(it)}" }
                 }
             },
@@ -301,6 +326,54 @@ fun ContractDetailScreen(
                         .onFailure { actionError = "옮기지 못했습니다: ${friendlyError(it)}" }
                 }
             },
+        )
+    }
+
+    if (renamingDoc && contract != null) {
+        TextInputDialog(
+            title = "서류 이름",
+            initial = contract.title,
+            hint = "예: 채권채무존재확인서",
+            onDismiss = { renamingDoc = false },
+            onConfirm = { name ->
+                renamingDoc = false
+                scope.launch {
+                    runCatching { ContractRepository.rename(contract.id, name) }
+                        .onFailure { actionError = friendlyError(it) }
+                }
+            },
+        )
+    }
+
+    confirmKind?.let { toRelated ->
+        if (contract == null) return@let
+        AlertDialog(
+            onDismissRequest = { confirmKind = null },
+            title = { Text(if (toRelated) "계약관련서류로 바꿀까요?" else "계약서로 바꿀까요?") },
+            text = {
+                Text(
+                    if (toRelated) {
+                        "AI 분석 결과를 지우고 계약내용정리·향후 일정에서 뺍니다. 사진은 그대로 남고 AI 분석은 하지 않아요."
+                    } else {
+                        "계약서로 바꾸고 AI 분석을 다시 합니다. 분석이 끝나면 계약내용정리에 들어갑니다."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmKind = null
+                    scope.launch {
+                        runCatching { ContractRepository.setRelated(context, listOf(contract.id), toRelated) }
+                            .onSuccess {
+                                actionError = null
+                                moveMessage = if (toRelated) "계약관련서류로 바꿨어요." else "계약서로 바꿨어요. AI 분석을 시작합니다."
+                                contract.folderId?.let { SummaryWorker.enqueue(context, it, force = false) }
+                            }
+                            .onFailure { actionError = friendlyError(it) }
+                    }
+                }) { Text("바꾸기") }
+            },
+            dismissButton = { TextButton(onClick = { confirmKind = null }) { Text("취소") } },
         )
     }
 
@@ -619,6 +692,44 @@ private fun MemoSection(contract: Contract) {
                         .onSuccess { saved = memo }
                 }
             }) { Text("메모 저장") }
+        }
+    }
+}
+
+/** 계약관련서류(채권채무존재확인서 등): AI 분석 없이 사진·이름·메모만 보관 */
+@Composable
+private fun RelatedDocCard(contract: Contract, onRename: () -> Unit, onMakeContract: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Text("계약관련서류 · AI 분석 안 함", color = Brand.TextSub, fontSize = 13.sp)
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    contract.title.ifBlank { "계약관련서류" },
+                    color = Brand.Navy,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onRename) {
+                    Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("이름 고치기")
+                }
+            }
+            Text(
+                "${contract.pageCount}페이지. 계약내용정리와 향후 일정에는 들어가지 않습니다.",
+                color = Brand.TextSub,
+                fontSize = 13.sp,
+            )
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(onClick = onMakeContract, modifier = Modifier.fillMaxWidth()) {
+                Text("계약서였다면: 계약서로 바꾸기 (AI 분석)")
+            }
         }
     }
 }

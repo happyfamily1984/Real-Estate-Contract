@@ -90,6 +90,13 @@ class FolderViewModel(application: Application, val folderId: String) : AndroidV
         _message.value = "계약서 ${ordered.size}건을 한 계약서로 합쳤어요. 합친 페이지로 다시 분석합니다."
     }
 
+    /** 고른 계약서들을 계약관련서류로 (AI 분석 결과를 지우고, 정리·일정에서 뺌) */
+    fun markRelated(contracts: List<Contract>) = run {
+        ContractRepository.setRelated(getApplication(), contracts.map { it.id }, related = true)
+        SummaryWorker.enqueue(getApplication(), folderId, force = false)
+        _message.value = "${contracts.size}건을 계약관련서류로 바꿨어요. AI 분석은 하지 않습니다."
+    }
+
     fun saveSummary(text: String) = run { FolderRepository.saveSummaryText(folderId, text) }
 
     /** 계약서 내용적용: 저장해 둔 핵심 텍스트로 다시 정리 (직접 고친 내용은 덮어씀) */

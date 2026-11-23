@@ -122,6 +122,7 @@ object ContractRepository {
         context: Context,
         files: List<Uri>,
         folderId: String?,
+        related: Boolean = false,
         onProgress: (done: Int, total: Int) -> Unit,
     ): String {
         require(files.isNotEmpty()) { "파일이 없습니다." }
@@ -163,11 +164,13 @@ object ContractRepository {
 
         doc.set(
             buildMap {
-                put("status", "pending")
+                // 계약관련서류는 AI 분석 없이 바로 '완료'로 보관한다. 이름은 파일 이름에서 가져온다.
+                put("status", if (related) "done" else "pending")
                 put("pageCount", pages.size)
                 put("thumbnail", thumbnail?.let(Blob::fromBytes))
                 put("memo", "")
-                put("title", "분석 중인 계약서")
+                put("title", if (related) relatedTitle(context, files) else "분석 중인 계약서")
+                if (related) put("docKind", Contract.KIND_RELATED)
                 put("pageHashes", hashes)
                 if (folderId != null) put("folderId", folderId)
                 // 폴더 안에서 올렸으면 이미 확인된 것, 아니면 '새로 올린 계약서 정리'에서 확인
@@ -177,8 +180,64 @@ object ContractRepository {
             },
         ).await()
 
-        AnalyzeWorker.enqueue(context, doc.id)
+        if (!related) AnalyzeWorker.enqueue(context, doc.id)
         return doc.id
+    }
+
+    /** 계약관련서류 기본 이름: 파일 이름(확장자 빼고). 촬영한 사진처럼 뜻 없는 이름이면 "계약관련서류". */
+    private fun relatedTitle(context: Context, files: List<Uri>): String {
+        val name = fileName(context, files.first()).substringBeforeLast('.').trim()
+        val meaningless = name.isBlank() || name.all { it.isDigit() || it in "_- ." } ||
+            name.startsWith("IMG", ignoreCase = true) || name.startsWith("Scan", ignoreCase = true) ||
+            name.startsWith("Screenshot", ignoreCase = true) || name.startsWith("PXL", ignoreCase = true) ||
+            name.startsWith("image", ignoreCase = true) || name.startsWith("document", ignoreCase = true)
+        return if (meaningless) "계약관련서류" else name.take(40)
+    }
+
+    /**
+     * 계약서 ↔ 계약관련서류 바꾸기.
+     * 관련서류로 바꾸면 분석 결과를 지우고(정리·일정에서 빠짐) AI 분석을 하지 않는다.
+     * 계약서로 되돌리면 다시 AI 분석을 예약한다.
+     */
+    suspend fun setRelated(context: Context, ids: Collection<String>, related: Boolean) {
+        val uid = uid()
+        ids.chunked(400).forEach { chunk ->
+            val batch = db.batch()
+            chunk.forEach { id ->
+                val update = if (related) {
+                    mapOf(
+                        "docKind" to Contract.KIND_RELATED,
+                        "status" to "done",
+                        "title" to "계약관련서류",
+                        "contractType" to "",
+                        "analysis" to FieldValue.delete(),
+                        "digest" to FieldValue.delete(),
+                        "sortDate" to FieldValue.delete(),
+                        "error" to FieldValue.delete(),
+                        "suggestedFolderId" to FieldValue.delete(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                } else {
+                    mapOf(
+                        "docKind" to Contract.KIND_CONTRACT,
+                        "status" to "pending",
+                        "title" to "분석 중인 계약서",
+                        "error" to FieldValue.delete(),
+                        "updatedAt" to FieldValue.serverTimestamp(),
+                    )
+                }
+                batch.update(contracts(uid).document(id), update)
+            }
+            batch.commit().await()
+        }
+        if (!related) ids.forEach { AnalyzeWorker.enqueue(context, it) }
+    }
+
+    /** 계약관련서류 이름 고치기 */
+    suspend fun rename(id: String, title: String) {
+        contracts(uid()).document(id).update(
+            mapOf("title" to title.trim().ifBlank { "계약관련서류" }, "updatedAt" to FieldValue.serverTimestamp()),
+        ).await()
     }
 
     private fun renderPdfPage(context: Context, uri: Uri, index: Int): Bitmap =
@@ -293,13 +352,13 @@ object ContractRepository {
             mapOf(
                 "pageCount" to index,
                 "pageHashes" to mergedHashes,
-                "status" to "pending",
+                "status" to if (target.isRelated) "done" else "pending",
                 "error" to FieldValue.delete(),
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
         ordered.drop(1).forEach { delete(it) }
-        AnalyzeWorker.enqueue(context, target.id)
+        if (!target.isRelated) AnalyzeWorker.enqueue(context, target.id)
         return target.id
     }
 
@@ -352,13 +411,15 @@ object ContractRepository {
         moved.forEachIndexed { i, bytes ->
             pages(uid, doc.id).document("$i").set(mapOf("index" to i, "image" to Blob.fromBytes(bytes))).await()
         }
+        val related = contract.isRelated
         doc.set(
             mapOf(
-                "status" to "pending",
+                "status" to if (related) "done" else "pending",
                 "pageCount" to moved.size,
                 "thumbnail" to thumbnailOfJpeg(moved.first())?.let(Blob::fromBytes),
                 "memo" to "",
-                "title" to "분석 중인 계약서",
+                "title" to if (related) contract.title else "분석 중인 계약서",
+                "docKind" to contract.docKind,
                 "folderId" to folderId,
                 "confirmed" to true,
                 "pageHashes" to movedHashes,
@@ -380,14 +441,16 @@ object ContractRepository {
                 "pageCount" to remaining.size,
                 "pageHashes" to remaining.map(::sha),
                 "thumbnail" to thumbnailOfJpeg(remaining.first())?.let(Blob::fromBytes),
-                "status" to "pending",
+                "status" to if (related) "done" else "pending",
                 "error" to FieldValue.delete(),
                 "updatedAt" to FieldValue.serverTimestamp(),
             ),
         ).await()
 
-        AnalyzeWorker.enqueue(context, doc.id)
-        AnalyzeWorker.enqueue(context, contract.id)
+        if (!related) {
+            AnalyzeWorker.enqueue(context, doc.id)
+            AnalyzeWorker.enqueue(context, contract.id)
+        }
         return doc.id
     }
 

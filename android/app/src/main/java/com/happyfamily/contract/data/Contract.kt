@@ -114,13 +114,18 @@ data class Contract(
     val suggestedFolderId: String? = null,
     /** 페이지 사진마다의 지문(SHA-256). 같은 파일이 또 올라오거나 옮겨지는 것을 막는 데 쓴다. */
     val pageHashes: List<String> = emptyList(),
+    /** "contract"(계약서) 또는 "related"(계약관련서류 — 채권채무존재확인서 등. AI 분석을 하지 않는다) */
+    val docKind: String = KIND_CONTRACT,
 ) {
+    /** 계약관련서류인지. 분석·정리·일정에서 빠지고 사진과 이름만 보관한다. */
+    val isRelated: Boolean get() = docKind == KIND_RELATED
+
     /** 검색어가 주소, 당사자 이름, 메모 등에 들어 있는지. */
     fun matches(query: String): Boolean {
         if (query.isBlank()) return true
         val a = analysis
         val haystack = listOfNotNull(
-            title, contractType, memo,
+            title, contractType, memo, if (isRelated) "계약관련서류" else null,
             a?.propertyAddress, a?.propertyType, a?.lessor?.name, a?.lessee?.name,
             a?.agent?.officeName, a?.summary,
         ).joinToString(" ")
@@ -128,6 +133,9 @@ data class Contract(
     }
 
     companion object {
+        const val KIND_CONTRACT = "contract"
+        const val KIND_RELATED = "related"
+
         fun from(doc: DocumentSnapshot): Contract {
             @Suppress("UNCHECKED_CAST")
             val analysisMap = doc.get("analysis") as? Map<String, Any?>
@@ -148,6 +156,7 @@ data class Contract(
                 confirmed = doc.getBoolean("confirmed") ?: true,
                 suggestedFolderId = doc.getString("suggestedFolderId")?.takeIf { it.isNotBlank() },
                 pageHashes = (doc.get("pageHashes") as? List<*>)?.filterIsInstance<String>().orEmpty(),
+                docKind = doc.getString("docKind")?.takeIf { it.isNotBlank() } ?: KIND_CONTRACT,
             )
         }
 

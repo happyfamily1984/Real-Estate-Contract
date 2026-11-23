@@ -35,7 +35,7 @@ class UpgradeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
         /** 기본 분석 결과인 계약서 수 */
         suspend fun localCount(): Int =
-            ContractRepository.allContracts().count { it.status == ContractStatus.DONE && it.analysis?.isLocal == true }
+            ContractRepository.allContracts().count { !it.isRelated && it.status == ContractStatus.DONE && it.analysis?.isLocal == true }
 
         /** 쓸 수 있는 AI 가 있으면 기본 분석 결과들을 분석 대기열에 넣는다. 넣은 건수를 돌려준다. */
         suspend fun upgradeNow(context: Context, ignoreCooldown: Boolean = false): Int {
@@ -43,7 +43,7 @@ class UpgradeWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             // 분석 대기열이 바쁘면 다음 기회에 (같은 계약서를 여러 번 넣지 않도록)
             if (!ignoreCooldown && AnalyzeWorker.queueActive(context)) return 0
             val local = ContractRepository.allContracts()
-                .filter { it.status == ContractStatus.DONE && it.analysis?.isLocal == true }
+                .filter { !it.isRelated && it.status == ContractStatus.DONE && it.analysis?.isLocal == true }
                 .sortedBy { it.createdAt }
             local.forEach { AnalyzeWorker.enqueue(context, it.id, upgrade = true) }
             return local.size
