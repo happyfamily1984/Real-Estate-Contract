@@ -1,0 +1,11 @@
+// 이 작업 환경에서만: Maven Central 대신 구글 미러 사용 (원래 주소의 일부 파일 리다이렉트가 막혀 있음)
+settingsEvaluated { settings ->
+    def repos = settings.dependencyResolutionManagement.repositories
+    repos.removeAll { it instanceof MavenArtifactRepository && it.url.toString().contains("repo.maven.apache.org") }
+    repos.maven { url "https://maven-central.storage-download.googleapis.com/maven2/" }
+}
+allprojects {
+    tasks.withType(Test).configureEach {
+        systemProperty "robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2/"
+    }
+}
